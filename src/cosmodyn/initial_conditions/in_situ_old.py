@@ -9,11 +9,9 @@ never load their OpenMP runtimes in the same process.
 
 from __future__ import division
 
-import json
 import os
 import pickle
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -33,176 +31,6 @@ def vcirc_fixed(r, pot):
 
 def number_of_globular_clusters(m_vir):
     return 10 ** (-9.58 + 0.99 * np.log10(m_vir))
-
-
-
-def _agama_config_file():
-    """Return the user-level CosmoDyn configuration file."""
-    return Path.home() / ".cosmodyn" / "config.json"
-
-
-def _load_saved_agama_python():
-    """Load a previously validated AGAMA Python interpreter, if available."""
-    config_file = _agama_config_file()
-
-    if not config_file.exists():
-        return None
-
-    try:
-        with config_file.open("r", encoding="utf-8") as stream:
-            config = json.load(stream)
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    executable = config.get("agama_python_executable")
-
-    if not executable:
-        return None
-
-    return Path(executable).expanduser()
-
-
-def _save_agama_python(python_executable):
-    """Save a validated AGAMA Python interpreter for future runs."""
-    config_file = _agama_config_file()
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-
-    config = {}
-
-    if config_file.exists():
-        try:
-            with config_file.open("r", encoding="utf-8") as stream:
-                config = json.load(stream)
-        except (OSError, json.JSONDecodeError):
-            config = {}
-
-    config["agama_python_executable"] = str(python_executable)
-
-    with config_file.open("w", encoding="utf-8") as stream:
-        json.dump(config, stream, indent=2)
-
-
-def _python_can_import_agama(python_executable):
-    """Return True if the supplied Python interpreter can import AGAMA."""
-    python_executable = Path(python_executable).expanduser()
-
-    if not python_executable.exists():
-        return False
-
-    try:
-        result = subprocess.run(
-            [
-                str(python_executable),
-                "-c",
-                "import agama",
-            ],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=20,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-    return result.returncode == 0
-
-
-def _candidate_python_executables():
-    """Return likely Python interpreters without duplicates."""
-    candidates = [
-        Path(sys.executable),
-        _load_saved_agama_python(),
-    ]
-
-    for command_name in ("python3", "python"):
-        executable = shutil.which(command_name)
-        if executable is not None:
-            candidates.append(Path(executable))
-
-    # Common framework locations on macOS.
-    framework_root = Path("/Library/Frameworks/Python.framework/Versions")
-    if framework_root.exists():
-        for executable in sorted(
-            framework_root.glob("*/bin/python3"),
-            reverse=True,
-        ):
-            candidates.append(executable)
-
-    unique_candidates = []
-    seen = set()
-
-    for candidate in candidates:
-        if candidate is None:
-            continue
-
-        try:
-            resolved = candidate.expanduser().resolve()
-        except OSError:
-            resolved = candidate.expanduser()
-
-        candidate_key = str(resolved)
-
-        if candidate_key not in seen:
-            seen.add(candidate_key)
-            unique_candidates.append(resolved)
-
-    return unique_candidates
-
-
-def find_agama_python(agama_python_executable=None):
-    """
-    Find a Python interpreter capable of importing AGAMA.
-
-    A manually supplied interpreter has priority. Otherwise, CosmoDyn
-    checks the current Python interpreter, a previously saved interpreter,
-    and common Python executables available on the system.
-    """
-    if agama_python_executable is not None:
-        manual_executable = Path(
-            agama_python_executable
-        ).expanduser()
-
-        if not manual_executable.exists():
-            raise FileNotFoundError(
-                "AGAMA Python executable not found: "
-                f"{manual_executable}"
-            )
-
-        if not _python_can_import_agama(manual_executable):
-            raise RuntimeError(
-                "The supplied Python interpreter cannot import AGAMA: "
-                f"{manual_executable}"
-            )
-
-        _save_agama_python(manual_executable)
-        return manual_executable
-
-    tested_executables = []
-
-    for candidate in _candidate_python_executables():
-        tested_executables.append(str(candidate))
-
-        if _python_can_import_agama(candidate):
-            print(f"AGAMA found with Python: {candidate}")
-            _save_agama_python(candidate)
-            return candidate
-
-    tested_text = "\n".join(
-        f"  - {executable}"
-        for executable in tested_executables
-    )
-
-    raise RuntimeError(
-        "AGAMA could not be imported with any detected Python "
-        "interpreter.\n\n"
-        "Interpreters tested:\n"
-        f"{tested_text}\n\n"
-        "Install AGAMA separately, or provide the interpreter manually "
-        "with:\n"
-        "agama_python_executable='/path/to/python'\n\n"
-        "To print the path of a Python interpreter, run:\n"
-        "python3 -c \"import sys; print(sys.executable)\""
-    )
 
 
 def ensure_agama_file(
@@ -231,9 +59,16 @@ def ensure_agama_file(
             f"AGAMA builder script not found: {agama_builder_path}"
         )
 
-    python_executable = find_agama_python(
-        agama_python_executable=agama_python_executable,
+    python_executable = (
+        Path(agama_python_executable).expanduser()
+        if agama_python_executable is not None
+        else Path(sys.executable)
     )
+
+    if not python_executable.exists():
+        raise FileNotFoundError(
+            f"AGAMA Python executable not found: {python_executable}"
+        )
 
     command = [
         str(python_executable),
@@ -283,16 +118,6 @@ def generate_in_situ_gcs(
     keep_agama_file=True,
     agama_python_executable=None,
 ):
-    """
-    Generate in-situ GC initial conditions.
-
-    Parameters
-    ----------
-    agama_python_executable : str or pathlib.Path, optional
-        Advanced override for the Python interpreter used by AGAMA.
-        When omitted, CosmoDyn searches automatically and remembers a
-        working interpreter in ``~/.cosmodyn/config.json``.
-    """
     if not os.path.exists(mwdata_path):
         raise FileNotFoundError(f"File not found: {mwdata_path}")
     if not os.path.exists(mwpots_path):

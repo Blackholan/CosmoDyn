@@ -94,7 +94,8 @@ def run_galaxy(galaxy_id):
             n_iter=N_ITER,
             n_particles_per_component=N_PARTICLES_PER_COMPONENT,
             random_seed=RANDOM_SEED,
-            keep_agama_file=KEEP_AGAMA_FILE)
+            keep_agama_file=KEEP_AGAMA_FILE,
+            agama_python_executable=AGAMA_PYTHON_EXECUTABLE)
 
 
     DF_CACHE_DIRECTORY = OUTPUT_DIR / "DynamicalFrictionForce"  # Directory where the precomputed dynamical-friction forces are stored
