@@ -1,48 +1,173 @@
 # CosmoDyn
 
-CosmoDyn is a semi-analytic framework for reconstructing time-dependent
-galactic potentials from cosmological simulations and following the
-dynamical evolution of compact stellar systems.
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 
-## Current features
+**CosmoDyn** is an open-source Python framework designed to reconstruct **time-dependent galactic potentials** from cosmological simulations and model the dynamical evolution of compact stellar systems such as **globular clusters (GCs)**, **nuclear star clusters (NSCs)** and **massive black holes (MBHs)**.
 
-- generation of in-situ globular-cluster initial conditions;
-- static and time-evolving galactic potentials;
-- Chandrasekhar dynamical friction;
-- fuzzy-dark-matter dynamical friction;
-- tidal mass loss;
-- central capture of globular clusters;
-- sequential processing of multiple galaxies.
+It combines analytic gravitational potentials with orbital integration techniques to study the evolution of stellar systems in realistic galaxy assembly histories.
 
-## Installation from GitHub
+---
 
-```bash
-python3 -m pip install git+https://github.com/Blackholan/CosmoDyn.git
-```
+## Features
 
-## Development installation
+Current version includes
+
+- ✅ Generation of **in-situ globular cluster initial conditions**
+- ✅ Static galactic potentials
+- ✅ Time-evolving galactic potentials
+- ✅ Chandrasekhar dynamical friction
+- ✅ Fuzzy Dark Matter (FDM) dynamical friction
+- ✅ Tidal mass loss
+- ✅ Central capture of compact stellar systems
+- ✅ Batch processing of multiple galaxies
+
+---
+
+## Installation
+
+Clone the repository
 
 ```bash
 git clone https://github.com/Blackholan/CosmoDyn.git
 cd CosmoDyn
-python3 -m pip install -e .
 ```
 
-## Basic usage
+Install CosmoDyn
+
+```bash
+pip install .
+```
+
+or, for development,
+
+```bash
+pip install -e .
+```
+
+---
+
+## Python dependencies
+
+The following packages are installed automatically
+
+- numpy
+- scipy
+- matplotlib
+- astropy
+- h5py
+- galpy
+- tqdm
+
+---
+
+## AGAMA dependency
+
+The generation of initial conditions relies on the **AGAMA** package.
+
+**AGAMA is NOT installed automatically.**
+
+This is intentional.
+
+CosmoDyn executes AGAMA in a **separate Python process** in order to avoid runtime conflicts between AGAMA and **galpy** (OpenMP libraries).
+
+### AGAMA is required only for
+
+- generating in-situ initial conditions;
+- creating AGAMA particle files.
+
+### AGAMA is NOT required for
+
+- orbit integration;
+- dynamical friction;
+- tidal mass loss;
+- FDM calculations;
+- analysing already-generated initial conditions.
+
+After installing AGAMA separately, simply specify the Python interpreter that can import AGAMA
+
+```python
+AGAMA_PYTHON_EXECUTABLE = "/path/to/python"
+```
+
+For example
+
+```python
+AGAMA_PYTHON_EXECUTABLE = (
+    "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+)
+```
+
+---
+
+## Basic example
 
 ```python
 from cosmodyn import (
     generate_in_situ_gcs,
     run_in_situ_dynamics,
 )
+
+generate_in_situ_gcs(...)
+
+run_in_situ_dynamics(...)
 ```
 
-## External dependency
+---
 
-The generation of initial conditions currently requires AGAMA.
+## Input data
 
-## Data
+CosmoDyn does **not** distribute cosmological simulations.
 
-Simulation inputs and production outputs are not distributed with the
-package. Users must provide their own potential, timestep, and galaxy
-data files.
+Users must provide their own
+
+- galaxy catalogues;
+- galactic potential files;
+- timestep files;
+- particle catalogues.
+
+---
+
+## Project roadmap
+
+### Current release
+
+- ✅ In-situ globular clusters
+- ✅ Static potentials
+- ✅ Time-evolving potentials
+- ✅ Chandrasekhar dynamical friction
+- ✅ FDM dynamical friction
+- ✅ Mass loss
+
+### Planned features
+
+- ⏳ Ex-situ globular clusters
+- ⏳ Massive black holes
+- ⏳ Nuclear star clusters
+- ⏳ Triaxial potentials
+- ⏳ Additional dark matter models
+- ⏳ Automatic documentation
+- ⏳ Jupyter tutorials
+
+---
+
+## Contributing
+
+Contributions are welcome.
+
+If you find a bug or would like to request a feature, please open an Issue or submit a Pull Request.
+
+---
+
+## Citation
+
+If you use **CosmoDyn** in your research, please cite
+
+> Boldrini et al. (in preparation)
+
+
+---
+
+## License
+
+This project is distributed under the **MIT License**.
