@@ -108,18 +108,49 @@ def _python_can_import_agama(python_executable):
 
 
 def _candidate_python_executables():
-    """Return likely Python interpreters without duplicates."""
-    candidates = [
-        Path(sys.executable),
-        _load_saved_agama_python(),
-    ]
+    """
+    Return likely Python interpreters without duplicates.
 
+    The search explicitly checks both the currently active interpreter
+    (including a virtual environment) and the base/system interpreter.
+    """
+    candidates = []
+
+    # 1. Current interpreter.
+    #    If CosmoDyn is running inside a virtual environment, this is the
+    #    virtual-environment Python and must always be tested first.
+    candidates.append(Path(sys.executable))
+
+    # 2. Previously validated AGAMA interpreter.
+    saved_executable = _load_saved_agama_python()
+    if saved_executable is not None:
+        candidates.append(saved_executable)
+
+    # 3. Base/system interpreter used to create the virtual environment.
+    base_executable = getattr(sys, "_base_executable", None)
+    if base_executable:
+        candidates.append(Path(base_executable))
+
+    # 4. Reconstruct possible base interpreters from sys.base_prefix.
+    base_prefix = Path(sys.base_prefix)
+    for executable_name in ("python3", "python"):
+        candidates.append(base_prefix / "bin" / executable_name)
+
+    # 5. Python executables visible through the current PATH.
     for command_name in ("python3", "python"):
         executable = shutil.which(command_name)
         if executable is not None:
             candidates.append(Path(executable))
 
-    # Common framework locations on macOS.
+    # 6. Common Unix/macOS system locations.
+    for executable in (
+        Path("/usr/bin/python3"),
+        Path("/usr/local/bin/python3"),
+        Path("/opt/homebrew/bin/python3"),
+    ):
+        candidates.append(executable)
+
+    # 7. Common Python.org framework installations on macOS.
     framework_root = Path("/Library/Frameworks/Python.framework/Versions")
     if framework_root.exists():
         for executable in sorted(
@@ -135,10 +166,15 @@ def _candidate_python_executables():
         if candidate is None:
             continue
 
+        candidate = Path(candidate).expanduser()
+
+        if not candidate.exists():
+            continue
+
         try:
-            resolved = candidate.expanduser().resolve()
+            resolved = candidate.resolve()
         except OSError:
-            resolved = candidate.expanduser()
+            resolved = candidate
 
         candidate_key = str(resolved)
 
@@ -147,7 +183,6 @@ def _candidate_python_executables():
             unique_candidates.append(resolved)
 
     return unique_candidates
-
 
 def find_agama_python(agama_python_executable=None):
     """
@@ -179,8 +214,11 @@ def find_agama_python(agama_python_executable=None):
 
     tested_executables = []
 
+    print("Searching for a Python interpreter with AGAMA...")
+
     for candidate in _candidate_python_executables():
         tested_executables.append(str(candidate))
+        print(f"Testing Python interpreter: {candidate}")
 
         if _python_can_import_agama(candidate):
             print(f"AGAMA found with Python: {candidate}")
