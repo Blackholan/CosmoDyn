@@ -84,7 +84,12 @@ CosmoDyn executes AGAMA in a **separate Python process** in order to avoid runti
 - FDM calculations;
 - analysing already-generated initial conditions.
 
-After installing AGAMA separately, CosmoDyn automatically searches for an existing Python installation containing AGAMA.
+After installing AGAMA separately, 
+
+```bash
+pip install agama
+```
+CosmoDyn automatically searches for an existing Python installation containing AGAMA.
 
 Only if no installation is found does the user need to specify the interpreter manually.
 
@@ -101,6 +106,11 @@ from cosmodyn import (
 generate_in_situ_gcs(...)
 
 run_in_situ_dynamics(...)
+```
+
+Try 
+```bash
+python examples/run_in_situ.py 
 ```
 
 ---
