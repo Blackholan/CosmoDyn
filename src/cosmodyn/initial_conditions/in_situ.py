@@ -171,16 +171,13 @@ def _candidate_python_executables():
         if not candidate.exists():
             continue
 
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            resolved = candidate
+        candidate = candidate.absolute()
 
-        candidate_key = str(resolved)
+        candidate_key = str(candidate)
 
         if candidate_key not in seen:
             seen.add(candidate_key)
-            unique_candidates.append(resolved)
+            unique_candidates.append(candidate)
 
     return unique_candidates
 
