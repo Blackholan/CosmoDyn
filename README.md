@@ -19,7 +19,6 @@ Current version includes
 - ✅ Chandrasekhar dynamical friction
 - ✅ Fuzzy Dark Matter (FDM) dynamical friction
 - ✅ Tidal mass loss
-- ✅ Central capture of compact stellar systems
 - ✅ Batch processing of multiple galaxies
 
 ---
@@ -58,6 +57,7 @@ The following packages are installed automatically
 - h5py
 - galpy
 - tqdm
+- pandas
 
 ---
 
@@ -65,24 +65,10 @@ The following packages are installed automatically
 
 The generation of initial conditions relies on the **AGAMA** package.
 
-**AGAMA is NOT installed automatically.**
-
-This is intentional.
-
-CosmoDyn executes AGAMA in a **separate Python process** in order to avoid runtime conflicts between AGAMA and **galpy** (OpenMP libraries).
-
-### AGAMA is required only for
+**AGAMA is NOT installed automatically and is required only for**
 
 - generating in-situ initial conditions;
 - creating AGAMA particle files.
-
-### AGAMA is NOT required for
-
-- orbit integration;
-- dynamical friction;
-- tidal mass loss;
-- FDM calculations;
-- analysing already-generated initial conditions.
 
 After installing AGAMA separately, 
 
@@ -90,8 +76,6 @@ After installing AGAMA separately,
 pip install agama
 ```
 CosmoDyn automatically searches for an existing Python installation containing AGAMA.
-
-Only if no installation is found does the user need to specify the interpreter manually.
 
 ---
 
@@ -124,7 +108,6 @@ Users must provide their own
 - galaxy catalogues;
 - galactic potential files;
 - timestep files;
-- particle catalogues.
 
 ---
 
@@ -155,9 +138,6 @@ Users must provide their own
 
 Contributions are welcome.
 
-If you find a bug or would like to request a feature, please open an Issue or submit a Pull Request.
-
----
 
 ## Citation
 
