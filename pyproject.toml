@@ -22,6 +22,8 @@ dependencies = [
     "astropy",
     "h5py",
     "galpy",
+    "tqdm",
+    "pandas",
 ]
 
 
