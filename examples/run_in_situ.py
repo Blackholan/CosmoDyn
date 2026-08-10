@@ -13,7 +13,7 @@ from cosmodyn.timing import (record_stage_timing,start_stage_timer,write_timing_
 # Galaxy parameters
 # ==========================================================
 # Single galaxy:
-GALAXY_IDS = [613192]
+GALAXY_IDS = [462710]
 # Several galaxies:
 # GALAXY_IDS = [613192,462710]
 # Or read all galaxy IDs from a text file containing one ID per line:
@@ -23,13 +23,13 @@ N_CPUS = os.cpu_count() or 1
 
 # ICs
 
-RUN_ICS = False
+RUN_ICS = True
 
 SNAPSHOT_INDEX = 8  # index of the snapshot at which the objects are tagged
-NGC = 5  # 0 = use the halo-mass relation; >0 = impose this number of GCs
+NGC = 10  # 0 = use the halo-mass relation; >0 = impose this number of GCs
 ALPHA = 3  # used only when NGC = 0
 CIRCULARITY_THRESHOLD = 0.6 # Select particles with 0.6 <= Lz/Lcirc(E) <= 1
-TAGGING_RADIUS_FACTOR = 2 # inside x half-mass radius of stars
+TAGGING_RADIUS_FACTOR = 3 # inside x half-mass radius of stars
 N_ITER = 20
 N_PARTICLES_PER_COMPONENT = 1_000_00  # use this format, not 1e6
 RANDOM_SEED = None  # or 42 to obtain the same sample at each run
@@ -45,11 +45,11 @@ TIMESTEP_FILE = f"TimeStepGTNG50.txt" # [start time (Gyr), end time (Gyr), numbe
 POTENTIAL_MODE = "evolving"  # "evolving" or "static"
 STATIC_POTENTIAL_INDEX = 73     # used only for "static"
 
-DF_MODEL = "cdm"           # "none", "cdm", or "fdm"
-M22 = 1.0                  # 1.0 corresponds to 1e-22 eV for fdm model
+DF_MODEL = "fdm"           # "none", "cdm", or "fdm"
+M22 = 50                  # 1.0 corresponds to 1e-22 eV for fdm model
 
 # GC parameters
-GC_MASS = 1e6                 # Msun, same value for all GCs
+GC_MASS = 5e5                 # Msun, same value for all GCs
 GC_HALF_MASS_RADIUS = 0.01      # kpc, same value for all GCs
 REUSE_DF_CACHE = True  # Load existing dynamical-friction forces if available instead of recomputing them
 CENTRAL_CAPTURE_RADIUS = 0.01  # kpc; capture if the snapshot apocenter is below this radius
@@ -67,11 +67,11 @@ GC_POTENTIAL_SCALE_RADIUS = None  # kpc same as GC_HALF_MASS_RADIUS
 
 RUN_STREAM_ICS = True  # generate the Plummer particle distribution
 
-N_STREAM_PARTICLES = 100_00
+N_STREAM_PARTICLES = 1000
 N_STREAM_ITER = 30
 OVERWRITE_STREAM_ICS = False # no rerun of AGAMA for stream
 
-RUN_STREAMS = False  # integrate the stream particles
+RUN_STREAMS = True  # integrate the stream particles
 STREAM_N_JOBS = -1
 STREAM_BATCH_SIZE = 64
 
@@ -94,7 +94,9 @@ GC_PLUMMER_FILE = (
     )
 )
 
-TIMING_FILE = GLOBAL_OUTPUT_DIR / "ComputationTime.txt"
+MODE_TAG = f"{POTENTIAL_MODE}_{DF_MODEL}_{MASS_LOSS_MODE}"
+
+TIMING_FILE = GLOBAL_OUTPUT_DIR / f"ComputationTime_{MODE_TAG}.txt"
 
 
 # ==========================================================
@@ -180,14 +182,15 @@ def run_galaxy(galaxy_id):
     OUTPUT_FILE = OUTPUT_DIR / f"IniGCG{galaxy_id}.txt"
     PLOT_FILE = OUTPUT_DIR / f"G{galaxy_id}.png"
 
+    MODE_TAG = f"{POTENTIAL_MODE}_{DF_MODEL}_{MASS_LOSS_MODE}"
+
     GC_MOVING_POTENTIAL_DIRECTORY = OUTPUT_DIR / "GCPotential"
 
-    STREAM_OUTPUT_DIRECTORY = OUTPUT_DIR / "Streams"
-    STREAM_PLOT_DIRECTORY = OUTPUT_DIR / "StreamPlots"
+    STREAM_OUTPUT_DIRECTORY = OUTPUT_DIR / f"Streams_{MODE_TAG}"
+    STREAM_PLOT_DIRECTORY = OUTPUT_DIR / f"StreamPlots_{MODE_TAG}"
 
     DF_CACHE_DIRECTORY = OUTPUT_DIR / "DynamicalFrictionForce"
 
-    MODE_TAG = f"{POTENTIAL_MODE}_{DF_MODEL}_{MASS_LOSS_MODE}"
 
     DYNAMICS_OUTPUT_FILE = (
         OUTPUT_DIR
