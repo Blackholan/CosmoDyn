@@ -59,6 +59,7 @@ The following packages are installed automatically
 - galpy
 - tqdm
 - pandas
+- joblib
 
 ---
 
