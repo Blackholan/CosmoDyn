@@ -36,12 +36,6 @@ cd CosmoDyn
 Install CosmoDyn
 
 ```bash
-pip install .
-```
-
-or, for development,
-
-```bash
 pip install -e .
 ```
 
@@ -84,14 +78,13 @@ CosmoDyn automatically searches for an existing Python installation containing A
 ## Basic example
 
 ```python
-from cosmodyn import (
-    generate_in_situ_gcs,
-    run_in_situ_dynamics,
-)
+from cosmodyn import (generate_in_situ_gcs,generate_plummer_gc,run_in_situ_dynamics,run_in_situ_streams)
 
 generate_in_situ_gcs(...)
 
 run_in_situ_dynamics(...)
+
+run_in_situ_streams(...)
 ```
 
 Try 
