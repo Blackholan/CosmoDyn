@@ -19,6 +19,7 @@ Current version includes
 - ✅ Chandrasekhar dynamical friction
 - ✅ Fuzzy Dark Matter (FDM) dynamical friction
 - ✅ Tidal mass loss
+- ✅ Formation and evolution of tidal stream
 - ✅ Batch processing of multiple galaxies
 
 ---
@@ -111,26 +112,13 @@ Users must provide their own
 
 ---
 
-## Project roadmap
-
-### Current release
-
-- ✅ In-situ globular clusters
-- ✅ Static potentials
-- ✅ Time-evolving potentials
-- ✅ Chandrasekhar dynamical friction
-- ✅ FDM dynamical friction
-- ✅ Mass loss
-
-### Planned features
+## Planned features
 
 - ⏳ Ex-situ globular clusters
 - ⏳ Massive black holes
 - ⏳ Nuclear star clusters
 - ⏳ Triaxial potentials
 - ⏳ Additional dark matter models
-- ⏳ Automatic documentation
-- ⏳ Jupyter tutorials
 
 ---
 
