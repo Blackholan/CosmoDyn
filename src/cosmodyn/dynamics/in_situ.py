@@ -14,6 +14,8 @@ from galpy.orbit import Orbit
 from galpy.potential import (
     ChandrasekharDynamicalFrictionForce,
     FDMDynamicalFrictionForce,
+    MovingObjectPotential,
+    PlummerPotential,
     ttensor,
 )
 from scipy.integrate import solve_ivp
@@ -118,6 +120,80 @@ def _build_df_force(df_model, potential, gc_mass, gc_half_mass_radius, m22):
         )
 
     return None
+
+
+
+def _build_gc_moving_potential(
+    orbit,
+    host_potential,
+    gc_mass,
+    gc_scale_radius,
+    active=True,
+    inactive_reason=None,
+):
+    """
+    Build the GC potential information used by the stream calculation.
+
+    This intentionally follows the construction of the legacy
+    ``10MWGCsInStream.py`` script:
+
+    ``[GC Plummer potential, MovingObjectPotential(orbit, pot=host_potential)]``
+
+    An entry is created for every snapshot. When the GC should no longer
+    contribute a moving potential (for example after capture or after its
+    mass reaches zero), ``moving_potential`` is set to None and ``active``
+    is False. This allows the future stream integrator to switch explicitly
+    to the host-galaxy potential only.
+
+    Parameters
+    ----------
+    orbit : galpy.orbit.Orbit or None
+        Integrated GC orbit over the current snapshot interval.
+    host_potential : galpy potential or list
+        Galactic potential of the current snapshot.
+    gc_mass : float
+        GC mass in Msun for the current snapshot interval.
+    gc_scale_radius : float
+        Plummer scale radius in kpc.
+    active : bool, optional
+        Whether stream particles should still feel the GC moving potential.
+    inactive_reason : str, optional
+        Reason why the moving potential is no longer active.
+
+    Returns
+    -------
+    dict
+        Snapshot-level stream-potential information.
+    """
+    if (not active) or orbit is None or gc_mass <= 0.0:
+        return {
+            "active": False,
+            "gc_potential": None,
+            "moving_potential": None,
+            "fallback": "host_only",
+            "inactive_reason": inactive_reason,
+            "gc_mass": max(float(gc_mass), 0.0),
+        }
+
+    gc_potential = PlummerPotential(
+        amp=gc_mass * units.Msun,
+        b=gc_scale_radius * units.kpc,
+    )
+
+    # Keep the exact construction used in 10MWGCsInStream.py.
+    moving_potential = MovingObjectPotential(
+        orbit,
+        pot=host_potential,
+    )
+
+    return {
+        "active": True,
+        "gc_potential": gc_potential,
+        "moving_potential": moving_potential,
+        "fallback": None,
+        "inactive_reason": None,
+        "gc_mass": float(gc_mass),
+    }
 
 
 def _mass_loss_derivative(
@@ -242,6 +318,9 @@ def run_in_situ_dynamics(
     tidal_strength_reference=7.01e2,
     dissolution_time_normalization=0.0107,
     central_capture_radius=0.01,
+    generate_gc_moving_potentials=False,
+    gc_moving_potential_directory=None,
+    gc_potential_scale_radius=None,
 ):
     """
     Integrate in-situ GC orbits.
@@ -259,6 +338,16 @@ def run_in_situ_dynamics(
         history after the orbit integration and does not feed it back into DF.
         ``coupled`` computes mass loss after every snapshot and updates the DF
         force through ``force.GMs`` before the next orbit integration.
+    generate_gc_moving_potentials : bool, optional
+        If True, construct and save the moving Plummer potential of every GC
+        along its integrated orbit for each snapshot interval.
+    gc_moving_potential_directory : str or pathlib.Path, optional
+        Directory used to save the per-GC moving-potential pickle files.
+        The default is ``<output directory>/GCPotential``.
+    gc_potential_scale_radius : float, optional
+        Plummer scale radius of the GC potential in kpc. If None,
+        ``gc_half_mass_radius`` is used, reproducing the scale adopted in
+        the previous stream-generation script.
     """
     initial_conditions_file = Path(initial_conditions_file)
     timestep_file = Path(timestep_file)
@@ -269,6 +358,29 @@ def run_in_situ_dynamics(
         df_cache_directory = output_file.parent / "DynamicalFriction"
     else:
         df_cache_directory = Path(df_cache_directory)
+
+    if gc_potential_scale_radius is None:
+        gc_potential_scale_radius = gc_half_mass_radius
+
+    if gc_potential_scale_radius <= 0:
+        raise ValueError(
+            "gc_potential_scale_radius must be strictly positive."
+        )
+
+    if gc_moving_potential_directory is None:
+        gc_moving_potential_directory = (
+            output_file.parent / "GCPotential"
+        )
+    else:
+        gc_moving_potential_directory = Path(
+            gc_moving_potential_directory
+        )
+
+    if generate_gc_moving_potentials:
+        gc_moving_potential_directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
     for path in (initial_conditions_file, timestep_file, potential_file):
         if not path.exists():
@@ -428,6 +540,12 @@ def run_in_situ_dynamics(
     mass_all = []
     interval_potentials = []
 
+    gc_moving_potentials = (
+        [dict() for _ in range(number_of_clusters)]
+        if generate_gc_moving_potentials
+        else None
+    )
+
     for snapshot_index in range(start_snapshot_index, end_snapshot_index):
         print(
             f"Integrating snapshot interval "
@@ -471,6 +589,21 @@ def run_in_situ_dynamics(
 
             for cluster_index in range(number_of_clusters):
                 if captured[cluster_index]:
+                    # Keep an explicit inactive stream-potential entry.
+                    # The future stream integrator can then switch to the
+                    # host-galaxy potential only for this snapshot.
+                    if generate_gc_moving_potentials:
+                        gc_moving_potentials[cluster_index][
+                            snapshot_index
+                        ] = _build_gc_moving_potential(
+                            orbit=None,
+                            host_potential=potential,
+                            gc_mass=current_masses[cluster_index],
+                            gc_scale_radius=gc_potential_scale_radius,
+                            active=False,
+                            inactive_reason="captured",
+                        )
+
                     # Keep the GC fixed at its last integrated position
                     # to avoid an artificial jump in the trajectory plot.
                     x[cluster_index, :] = captured_x[cluster_index]
@@ -512,6 +645,26 @@ def run_in_situ_dynamics(
                     method=integration_method,
                 )
 
+                if generate_gc_moving_potentials:
+                    # In coupled mode, use the GC mass available at the
+                    # beginning of this snapshot interval. If the mass is
+                    # already zero, keep an explicit inactive entry so that
+                    # stream particles use the host potential only.
+                    gc_moving_potentials[cluster_index][
+                        snapshot_index
+                    ] = _build_gc_moving_potential(
+                        orbit=orbit if current_mass > 0.0 else None,
+                        host_potential=potential,
+                        gc_mass=current_mass,
+                        gc_scale_radius=gc_potential_scale_radius,
+                        active=(current_mass > 0.0),
+                        inactive_reason=(
+                            None
+                            if current_mass > 0.0
+                            else "zero_mass"
+                        ),
+                    )
+
                 x[cluster_index] = np.asarray(orbit.x(times))
                 y[cluster_index] = np.asarray(orbit.y(times))
                 z[cluster_index] = np.asarray(orbit.z(times))
@@ -543,6 +696,18 @@ def run_in_situ_dynamics(
                 active_indices = np.where(~captured)[0]
 
                 for cluster_index in captured_indices:
+                    if generate_gc_moving_potentials:
+                        gc_moving_potentials[cluster_index][
+                            snapshot_index
+                        ] = _build_gc_moving_potential(
+                            orbit=None,
+                            host_potential=potential,
+                            gc_mass=current_masses[cluster_index],
+                            gc_scale_radius=gc_potential_scale_radius,
+                            active=False,
+                            inactive_reason="captured",
+                        )
+
                     x[cluster_index, :] = captured_x[cluster_index]
                     y[cluster_index, :] = captured_y[cluster_index]
                     z[cluster_index, :] = captured_z[cluster_index]
@@ -572,6 +737,30 @@ def run_in_situ_dynamics(
                         integration_potential,
                         method=integration_method,
                     )
+
+                    if generate_gc_moving_potentials:
+                        for local_index, cluster_index in enumerate(
+                            active_indices
+                        ):
+                            if mass_loss_mode == "coupled":
+                                potential_mass = current_masses[
+                                    cluster_index
+                                ]
+                            else:
+                                # none and postprocess do not feed mass
+                                # evolution back into the GC potential.
+                                potential_mass = gc_mass
+
+                            gc_moving_potentials[cluster_index][
+                                snapshot_index
+                            ] = _build_gc_moving_potential(
+                                orbit=orbit[local_index],
+                                host_potential=potential,
+                                gc_mass=potential_mass,
+                                gc_scale_radius=(
+                                    gc_potential_scale_radius
+                                ),
+                            )
 
                     x_active = np.asarray(orbit.x(times))
                     y_active = np.asarray(orbit.y(times))
@@ -608,6 +797,26 @@ def run_in_situ_dynamics(
                     integration_potential,
                     method=integration_method,
                 )
+
+                if generate_gc_moving_potentials:
+                    for cluster_index in range(number_of_clusters):
+                        if mass_loss_mode == "coupled":
+                            potential_mass = current_masses[
+                                cluster_index
+                            ]
+                        else:
+                            # none and postprocess keep the GC potential
+                            # at the initial mass throughout the orbit run.
+                            potential_mass = gc_mass
+
+                        gc_moving_potentials[cluster_index][
+                            snapshot_index
+                        ] = _build_gc_moving_potential(
+                            orbit=orbit[cluster_index],
+                            host_potential=potential,
+                            gc_mass=potential_mass,
+                            gc_scale_radius=gc_potential_scale_radius,
+                        )
 
                 x = np.asarray(orbit.x(times))
                 y = np.asarray(orbit.y(times))
@@ -765,6 +974,40 @@ def run_in_situ_dynamics(
         else np.full((number_of_clusters, len(time_output)), gc_mass)
     )
 
+    gc_moving_potential_files = []
+
+    if generate_gc_moving_potentials:
+        potential_mode_tag = (
+            f"{potential_mode}_{df_model}_{mass_loss_mode}"
+        )
+
+        for cluster_index, potential_history in enumerate(
+            gc_moving_potentials
+        ):
+            potential_file = (
+                gc_moving_potential_directory
+                / (
+                    f"GCpotInSitu_{potential_mode_tag}_"
+                    f"GC{cluster_index}.pkl"
+                )
+            )
+
+            with potential_file.open("wb") as stream:
+                pickle.dump(
+                    potential_history,
+                    stream,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+
+            gc_moving_potential_files.append(
+                str(potential_file)
+            )
+
+        print(
+            "GC moving potentials saved to: "
+            f"{gc_moving_potential_directory}"
+        )
+
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(output_file, "w") as h5:
         group = h5.create_group("GCdata")
@@ -787,6 +1030,13 @@ def run_in_situ_dynamics(
         h5.attrs["initial_gc_mass_msun"] = gc_mass
         h5.attrs["central_capture_radius_kpc"] = central_capture_radius
         h5.attrs["gc_half_mass_radius_kpc"] = gc_half_mass_radius
+        h5.attrs["generate_gc_moving_potentials"] = (
+            generate_gc_moving_potentials
+        )
+        h5.attrs["gc_potential_scale_radius_kpc"] = (
+            gc_potential_scale_radius
+        )
+        h5.attrs["gc_moving_potential_fallback"] = "host_only"
         h5.attrs["mass_loss_gamma"] = mass_loss_gamma
         h5.attrs["tidal_strength_reference"] = tidal_strength_reference
         h5.attrs["dissolution_time_normalization"] = (
@@ -828,4 +1078,6 @@ def run_in_situ_dynamics(
         "mass_loss_mode": mass_loss_mode,
         "m22": m22 if df_model == "fdm" else None,
         "df_cache_file": str(df_cache_file) if df_cache_file else None,
+        "gc_moving_potential_files": gc_moving_potential_files,
+        "gc_potential_scale_radius": gc_potential_scale_radius,
     }
