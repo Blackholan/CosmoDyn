@@ -13,7 +13,7 @@ from cosmodyn.timing import (record_stage_timing,start_stage_timer,write_timing_
 # Galaxy parameters
 # ==========================================================
 # Single galaxy:
-GALAXY_IDS = [462710]
+GALAXY_IDS = [1]
 # Several galaxies:
 # GALAXY_IDS = [613192,462710]
 # Or read all galaxy IDs from a text file containing one ID per line:
@@ -25,16 +25,16 @@ N_CPUS = os.cpu_count() or 1
 # In-situ ICs
 # ==========================================================
 
-RUN_ICS = True
+RUN_ICS = False
 
-SNAPSHOT_INDEX = 8  # index of the snapshot at which the objects are tagged
-NGC = 3  # 0 = use the halo-mass relation; >0 = impose this number of GCs
-ALPHA = 3  # used only when NGC = 0
-CIRCULARITY_THRESHOLD = 0.1 # Select particles with 0.6 <= Lz/Lcirc(E) <= 1 if not put None
-TAGGING_RADIUS_FACTOR = 3 # inside x half-mass radius of stars
-MINIMUM_TAGGING_RADIUS = None  # kpc; None disables the constraint None otherwise
+SNAPSHOT_INDEX = 0  # index of the snapshot at which the objects are tagged
+NGC = 5  # 0 = use the halo-mass relation; >0 = impose this number of GCs
+ALPHA = 1  # used only when NGC = 0
+CIRCULARITY_THRESHOLD = None # Select particles with 0.6 <= Lz/Lcirc(E) <= 1 if not put None
+TAGGING_RADIUS_FACTOR = 2 # inside x half-mass radius of stars
+MINIMUM_TAGGING_RADIUS = 0.5  # kpc; None disables the constraint None otherwise
 N_ITER = 20
-N_PARTICLES_PER_COMPONENT = 1_000_00  # use this format, not 1e6
+N_PARTICLES_PER_COMPONENT = 1_000_000  # use this format, not 1e6
 RANDOM_SEED = None  # or 42 to obtain the same sample at each run
 KEEP_AGAMA_FILE = False  # keep the AGAMA file after generating the ICs
 
@@ -59,21 +59,21 @@ RUN_DYNAMICS = True  # integrate the GC orbits after generating the ICs
 
 END_SNAPSHOT_INDEX = None  # None = integrate to the end
 INTEGRATION_METHOD = "dop853_c"
-TIMESTEP_FILE = f"TimeStepGTNG50.txt" # [start time (Gyr), end time (Gyr), number of integration steps]
-POTENTIAL_MODE = "evolving"  # "evolving" or "static"
-STATIC_POTENTIAL_INDEX = 73     # used only for "static"
+TIMESTEP_FILE = f"TimeStepG1.txt" # [start time (Gyr), end time (Gyr), number of integration steps]
+POTENTIAL_MODE = "static"  # "evolving" or "static"
+STATIC_POTENTIAL_INDEX = 0     # used only for "static"
 
 DF_MODEL = "cdm"           # "none", "cdm", or "fdm"
 M22 = 1                  # 1.0 corresponds to 1e-22 eV for fdm model
 
 # GC parameters
-GC_MASS = 1e6                 # Msun, same value for all GCs
+GC_MASS = 5e5                 # Msun, same value for all GCs
 GC_HALF_MASS_RADIUS = 0.01      # kpc, same value for all GCs
 REUSE_DF_CACHE = True  # Load existing dynamical-friction forces if available instead of recomputing them
 CENTRAL_CAPTURE_RADIUS = 0.01  # kpc; capture if the snapshot apocenter is below this radius
 
 # Mass loss parameters
-MASS_LOSS_MODE = "coupled"  # "none", "postprocess", or "coupled"
+MASS_LOSS_MODE = "none"  # "none", "postprocess", or "coupled"
 MASS_LOSS_GAMMA = 0.7 # Based on Kruijssen+11 mass loss model
 TIDAL_STRENGTH_REFERENCE = 7.01e2 # Based on Kruijssen+11 mass loss model
 DISSOLUTION_TIME_NORMALIZATION = 0.0107 # Based on Kruijssen+11 mass loss model
@@ -85,7 +85,7 @@ GC_POTENTIAL_SCALE_RADIUS = None  # kpc same as GC_HALF_MASS_RADIUS
 
 RUN_STREAM_ICS = True  # generate the Plummer particle distribution
 
-N_STREAM_PARTICLES = 1000
+N_STREAM_PARTICLES = 100000
 N_STREAM_ITER = 30
 OVERWRITE_STREAM_ICS = False # no rerun of AGAMA for stream
 

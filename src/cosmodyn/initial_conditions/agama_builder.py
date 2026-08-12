@@ -27,31 +27,65 @@ def generate_agama_file(
         print(f"AGAMA particle file already exists: {agama_file}")
         return
 
-    A = np.loadtxt(mwdata_path)
+    # np.loadtxt returns a one-dimensional array for a one-row file.
+    # Converting it explicitly to 2D makes both one- and multi-row inputs work.
+    A = np.atleast_2d(np.loadtxt(mwdata_path))
 
-    r_hm1 = A[:, 10][snapshot_index]
-    rc = r_hm1 * (np.sqrt(2.0) - 1.0)
-    mass_bulge = A[:, 6][snapshot_index]
-    mass_dm = A[:, 4][snapshot_index]
-    rs_dm = A[:, 9][snapshot_index]
+    if A.shape[1] < 11:
+        raise ValueError(
+            f"{mwdata_path} must contain at least 11 columns; "
+            f"found {A.shape[1]}."
+        )
+
+    if snapshot_index < 0 or snapshot_index >= A.shape[0]:
+        raise IndexError(
+            f"Snapshot index {snapshot_index} is outside the available "
+            f"row range 0-{A.shape[0] - 1} in {mwdata_path}."
+        )
+
+    mass_dm = A[snapshot_index, 4]
+    rs_dm = A[snapshot_index, 9]
+    mass_star = A[snapshot_index, 6]
+    r_hm_star = A[snapshot_index, 10]
+
+    if not np.isfinite(mass_dm) or mass_dm <= 0.0:
+        raise ValueError(
+            f"The dark-matter mass must be finite and positive; got {mass_dm}."
+        )
+    if not np.isfinite(rs_dm) or rs_dm <= 0.0:
+        raise ValueError(
+            f"The NFW scale radius must be finite and positive; got {rs_dm}."
+        )
+
+    has_stellar_component = (
+        np.isfinite(mass_star)
+        and mass_star > 0.0
+        and np.isfinite(r_hm_star)
+        and r_hm_star > 0.0
+    )
+
+    if has_stellar_component:
+        reference_radius = r_hm_star
+    else:
+        reference_radius = rs_dm
+
+    tagging_radius = (
+        tagging_radius_factor * reference_radius
+    )
+
+    maximum_spherical_radius = (
+        tagging_radius_factor + 1.0
+    ) * reference_radius
 
     density_halo = agama.Density(
         Type="NFW",
         mass=mass_dm,
         scaleRadius=rs_dm,
     )
-    density_star = agama.Density(
-        Type="Dehnen",
-        mass=mass_bulge,
-        gamma=1.0,
-        axisRatioY=1,
-        axisRatioZ=1,
-        scaleRadius=rc,
-    )
 
     model = agama.SelfConsistentModel(
         rminSph=0.01,
-        rmaxSph=300.0,
+        rmaxSph=maximum_spherical_radius,
         sizeRadialSph=50,
         lmaxAngularSph=4,
         RminCyl=0.2,
@@ -66,9 +100,24 @@ def generate_agama_file(
     model.components.append(
         agama.Component(density=density_halo, disklike=False)
     )
-    model.components.append(
-        agama.Component(density=density_star, disklike=False)
-    )
+
+    if has_stellar_component:
+        stellar_scale_radius = r_hm_star * (np.sqrt(2.0) - 1.0)
+        density_star = agama.Density(
+            Type="Dehnen",
+            mass=mass_star,
+            gamma=1.0,
+            axisRatioY=1,
+            axisRatioZ=1,
+            scaleRadius=stellar_scale_radius,
+        )
+        model.components.append(
+            agama.Component(density=density_star, disklike=False)
+        )
+        print("AGAMA model: NFW halo + stellar Dehnen component.")
+    else:
+        print("AGAMA model: NFW halo only.")
+        print("No valid stellar mass and half-mass radius were found.")
 
     for i in range(n_iter):
         print(f"Starting AGAMA iteration {i + 1}/{n_iter}", flush=True)
@@ -79,49 +128,53 @@ def generate_agama_file(
         potential=model.potential,
         density=density_halo,
     )
-    df_star_agama = agama.DistributionFunction(
-        type="QuasiSpherical",
-        potential=model.potential,
-        density=density_star,
-    )
-
     model.components[0] = agama.Component(
         df=df_halo,
         disklike=False,
         rminSph=0.1,
-        rmaxSph=500.0,
+        rmaxSph=maximum_spherical_radius,
         sizeRadialSph=50,
         lmaxAngularSph=4,
     )
-    model.components[1] = agama.Component(
-        df=df_star_agama,
-        disklike=False,
-        rminSph=0.1,
-        rmaxSph=500.0,
-        sizeRadialSph=50,
-        lmaxAngularSph=4,
-    )
+    if has_stellar_component:
+        df_sampling = agama.DistributionFunction(
+            type="QuasiSpherical",
+            potential=model.potential,
+            density=density_star,
+        )
+        model.components[1] = agama.Component(
+            df=df_sampling,
+            disklike=False,
+            rminSph=0.1,
+            rmaxSph=maximum_spherical_radius,
+            sizeRadialSph=50,
+            lmaxAngularSph=4,
+        )
+        print("Sampling the stellar distribution function.")
+    else:
+        df_sampling = df_halo
+        print("Sampling the NFW halo distribution function.")
 
-    galaxy_model_star = agama.GalaxyModel(
+    print(f"Tagging radius: {tagging_radius:.6g}")
+
+    galaxy_model = agama.GalaxyModel(
         potential=model.potential,
-        df=df_star_agama,
+        df=df_sampling,
         af=model.af,
     )
-    dat = galaxy_model_star.sample(n_particles_per_component)
+    dat = galaxy_model.sample(n_particles_per_component)
 
-    df_star = pd.DataFrame(
+    df_particles = pd.DataFrame(
         dat[0][:, :6],
         columns=["x", "y", "z", "u", "v", "w"],
     )
-    df_star["r"] = np.sqrt(
-        df_star["x"] ** 2
-        + df_star["y"] ** 2
-        + df_star["z"] ** 2
+    df_particles["r"] = np.sqrt(
+        df_particles["x"] ** 2
+        + df_particles["y"] ** 2
+        + df_particles["z"] ** 2
     )
 
-    tagging_radius = tagging_radius_factor * r_hm1
-
-    df_gc = df_star[df_star["r"] < tagging_radius]
+    df_gc = df_particles[df_particles["r"] < tagging_radius]
 
     output_directory = os.path.dirname(agama_file)
     if output_directory:
@@ -144,7 +197,7 @@ def main():
     parser.add_argument("--mwdata", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--snapshot-index", type=int, default=8)
-    parser.add_argument("--tagging-radius-factor", type=int, default=1)
+    parser.add_argument("--tagging-radius-factor", type=float, default=1.0)
     parser.add_argument("--n-iter", type=int, default=20)
     parser.add_argument("--n-particles", type=int, default=1_000_000)
     args = parser.parse_args()

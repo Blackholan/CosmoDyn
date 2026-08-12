@@ -73,8 +73,7 @@ def write_timing_report(
     failed_galaxies = failed_galaxies or []
 
     stages = [
-        "RUN_IN_SITU_ICS",
-        "RUN_EX_SITU_ICS",
+        "RUN_ICS",
         "RUN_STREAM_ICS",
         "RUN_DYNAMICS",
         "RUN_STREAMS",
@@ -101,12 +100,7 @@ def write_timing_report(
             ("snapshot_index", "Snapshot index"),
             ("circularity_threshold", "Circularity threshold"),
             ("tagging_radius_factor", "Tagging radius factor"),
-            ("n_particles_per_component", "AGAMA particles for in-situ GC ICs"),
-            ("ngc_ex_situ", "Ex-situ GCs per satellite (0 = scaling relation)"),
-            ("alpha_ex_situ", "Ex-situ GC-number scaling factor"),
-            ("ex_situ_tagging_radius_factor", "Ex-situ tagging radius factor"),
-            ("ex_situ_circularity_threshold", "Ex-situ circularity threshold"),
-            ("ex_situ_n_particles_per_component", "AGAMA particles for ex-situ GC ICs"),
+            ("n_particles_per_component", "AGAMA particles for GC ICs"),
             ("potential_mode", "Potential mode"),
             ("df_model", "Dynamical-friction model"),
             ("m22", "m22"),
@@ -239,6 +233,9 @@ def write_timing_report(
             "CPU-hours summed over all recorded stages: "
             f"{total_cpu_hours:.6f} CPUh\n"
         )
-        
+        stream.write(
+            "\nCPUh definition: "
+            "wall-clock time [hours] x number of CPUs.\n"
+        )
 
     print(f"Computation-time report saved to: {output_file}")

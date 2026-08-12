@@ -362,7 +362,12 @@ def run_in_situ_streams(
             )
             times = times_numeric * units.Gyr
 
-            host_potential = host_potentials[snapshot_index]
+            # Snapshot-indexed potentials, as in the evolving TNG50 model.
+            if isinstance(host_potentials, dict):
+                host_potential = host_potentials[snapshot_index]
+            else:
+                host_potential = host_potentials
+
             _set_non_dissipative(host_potential)
 
             entry = _normalise_moving_potential_entry(

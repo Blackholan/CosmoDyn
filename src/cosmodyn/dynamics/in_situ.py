@@ -436,13 +436,31 @@ def run_in_situ_dynamics(
         )
 
     static_potential = None
+
     if potential_mode == "static":
-        if not 0 <= static_potential_index < len(potentials):
-            raise IndexError(
-                f"static_potential_index={static_potential_index} is outside "
-                f"the available range [0, {len(potentials) - 1}]."
-            )
-        static_potential = potentials[static_potential_index]
+
+        # Potentials indexed by snapshot, as in the TNG50 pipeline.
+        if isinstance(potentials, dict):
+            if static_potential_index not in potentials:
+                raise KeyError(
+                    f"static_potential_index="
+                    f"{static_potential_index} is not available. "
+                    f"Available indices: {list(potentials.keys())}"
+                )
+
+            static_potential = potentials[
+                static_potential_index
+            ]
+
+        # A list or tuple directly represents several components
+        # of the same static potential.
+        elif isinstance(potentials, (list, tuple)):
+            static_potential = potentials
+
+        # A single static galpy potential.
+        else:
+            static_potential = potentials
+
         _set_non_dissipative(static_potential)
 
     potential_description = (

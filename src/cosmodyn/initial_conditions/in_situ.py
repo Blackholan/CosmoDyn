@@ -310,6 +310,7 @@ def generate_in_situ_gcs(
     ngc=0,
     alpha=3,
     tagging_radius_factor=1.0,
+    minimum_tagging_radius=None,
     circularity_threshold=0.6,
     n_iter=20,
     n_particles_per_component=1_000_000,
@@ -344,7 +345,7 @@ def generate_in_situ_gcs(
         agama_python_executable=agama_python_executable,
     )
 
-    A = np.loadtxt(mwdata_path)
+    A = np.atleast_2d(np.loadtxt(mwdata_path))
     m_vir = A[:, 4][snapshot_index]
 
     if ngc == 0:
@@ -389,43 +390,82 @@ def generate_in_situ_gcs(
     with open(mwpots_path, "rb") as f:
         mwpots = pickle.load(f)
 
-    potential = mwpots[snapshot_index]
-
-    # Important for potentials loaded from older pickle files:
-    # the attribute may not exist at all, so it must be created explicitly,
-    # as in the original script.
-    if isinstance(potential, (list, tuple)):
-        for component in potential:
-            component.isDissipative = False
+    # Evolving potentials are generally stored in a dictionary indexed
+    # by snapshot. A static potential is stored directly.
+    if isinstance(mwpots, dict):
+        potential = mwpots[snapshot_index]
     else:
-        potential.isDissipative = False
+        potential = mwpots
 
-    E_pot_corrected1 = evaluatePotentials(
-        mwpots[snapshot_index][0],
-        pos * units.kpc,
-        0 * units.kpc,
-    )
-    E_pot_corrected2 = evaluatePotentials(
-        mwpots[snapshot_index][1],
-        pos * units.kpc,
-        0 * units.kpc,
-    )
+    # Convert the potential to a list of components internally.
+    if isinstance(potential, (list, tuple)):
+        potential_components = list(potential)
+    else:
+        potential_components = [potential]
 
-    E2 = 0.5 * vel**2 + E_pot_corrected1 + E_pot_corrected2
+    # Compatibility with potentials loaded from pickle files.
+    for component in potential_components:
+        component.isDissipative = False
+
+    # ----------------------------------------------------------
+    # Energy of the AGAMA particles
+    # ----------------------------------------------------------
+
+    potential_energy = np.zeros_like(pos, dtype=float)
+
+    for component in potential_components:
+        potential_energy += evaluatePotentials(
+            component,
+            pos * units.kpc,
+            0.0 * units.kpc,
+        )
+
+    E2 = 0.5 * vel**2 + potential_energy
     Lz2 = R * vT
 
-    plt.scatter(Lz2 / 1e3, E2 / 1e5, s=1)
-
-    u1 = np.linspace(0.01, 200, 10000)
-
-    Lzm1 = u1 * vcirc_fixed(u1, mwpots[snapshot_index][0] + mwpots[snapshot_index][1])
-
-    Etest1 = (
-        evaluatePotentials(mwpots[snapshot_index][1], u1 * units.kpc, 0 * units.kpc)
-        + evaluatePotentials(mwpots[snapshot_index][0], u1 * units.kpc, 0 * units.kpc)
+    plt.scatter(
+        Lz2 / 1e3,
+        E2 / 1e5,
+        s=1,
     )
 
-    Ego1 = 0.5 * vcirc_fixed(u1, mwpots[snapshot_index][0] + mwpots[snapshot_index][1])**2 + Etest1
+    # ----------------------------------------------------------
+    # Circular-orbit curve
+    # ----------------------------------------------------------
+
+    u1 = np.linspace(0.01, 200.0, 10000)
+
+    circular_velocity_squared = np.zeros_like(u1)
+    circular_potential_energy = np.zeros_like(u1)
+
+    for component in potential_components:
+        component_circular_velocity = vcirc_fixed(
+            u1,
+            component,
+        )
+
+        circular_velocity_squared += (
+            component_circular_velocity**2
+        )
+
+        circular_potential_energy += evaluatePotentials(
+            component,
+            u1 * units.kpc,
+            0.0 * units.kpc,
+        )
+
+    circular_velocity = np.sqrt(
+        circular_velocity_squared
+    )
+
+    Lzm1 = u1 * circular_velocity
+
+    Ego1 = (
+        0.5 * circular_velocity_squared
+        + circular_potential_energy
+    )
+
+
 
     order = np.argsort(Ego1)
 
@@ -448,11 +488,35 @@ def generate_in_situ_gcs(
 
     Lcirc_part = Lcirc_of_E(E2)
 
-    sol1 = np.where(
-        np.isfinite(Lcirc_part)
-        & (Lz2 >= circularity_threshold * Lcirc_part)
-        & (Lz2 <= Lcirc_part)
-    )[0]
+    if minimum_tagging_radius is None:
+        radial_selection = np.ones(
+            len(pos),
+            dtype=bool,
+        )
+    else:
+        if minimum_tagging_radius < 0.0:
+            raise ValueError(
+                "minimum_tagging_radius must be non-negative "
+                "or None."
+            )
+
+        radial_selection = (
+            pos >= minimum_tagging_radius
+        )
+
+    if circularity_threshold is None:
+        sol1 = np.where(
+            np.isfinite(E2)
+            & np.isfinite(Lz2)
+            & radial_selection
+        )[0]
+    else:
+        sol1 = np.where(
+            np.isfinite(Lcirc_part)
+            & (Lz2 >= circularity_threshold * Lcirc_part)
+            & (Lz2 <= Lcirc_part)
+            & radial_selection
+        )[0]
 
     print(
     f"Number of candidate particles available for GC tagging: "
@@ -488,7 +552,24 @@ def generate_in_situ_gcs(
 
     plot_file_xy = Path(plot_file).with_stem(Path(plot_file).stem + "_xy")
 
-    r_hm1 = A[:, 10][snapshot_index]
+    mass_star = A[snapshot_index, 6]
+    r_hm_star = A[snapshot_index, 10]
+    rs_dm = A[snapshot_index, 9]
+
+    has_stellar_component = (
+        np.isfinite(mass_star)
+        and mass_star > 0.0
+        and np.isfinite(r_hm_star)
+        and r_hm_star > 0.0
+    )
+
+    if has_stellar_component:
+        reference_radius = r_hm_star
+        reference_radius_label = "Stellar half-mass radius"
+    else:
+        reference_radius = rs_dm
+        reference_radius_label = "NFW scale radius"
+
     x_gc = x[drawn]
     y_gc = y[drawn]
     z_gc = z[drawn]
@@ -506,10 +587,10 @@ def generate_in_situ_gcs(
 
     circle_xy = Circle(
         (0.0, 0.0),
-        r_hm1,
+        reference_radius,
         fill=False,
         linestyle="--",
-        linewidth=1.5,label=r"Stellar half-mass radius",
+        linewidth=1.5,label=reference_radius_label,
     )
 
     axes[0].add_patch(circle_xy)
@@ -518,8 +599,6 @@ def generate_in_situ_gcs(
     axes[0].set_ylabel(r"$y$ [kpc]")
     axes[0].set_title(r"$x-y$ plane")
     axes[0].set_aspect("equal", adjustable="box")
-    #axes[0].set_xlim(-1.1 * r_hm1, 1.1 * r_hm1)
-    #axes[0].set_ylim(-1.1 * r_hm1, 1.1 * r_hm1)
 
     # x-z plane
     axes[1].scatter(
@@ -530,7 +609,7 @@ def generate_in_situ_gcs(
 
     circle_xz = Circle(
         (0.0, 0.0),
-        r_hm1,
+        reference_radius,
         fill=False,
         linestyle="--",
         linewidth=1.5,
@@ -541,8 +620,7 @@ def generate_in_situ_gcs(
     axes[1].set_ylabel(r"$z$ [kpc]")
     axes[1].set_title(r"$x-z$ plane")
     axes[1].set_aspect("equal", adjustable="box")
-    #axes[1].set_xlim(-1.1 * r_hm1, 1.1 * r_hm1)
-    #axes[1].set_ylim(-1.1 * r_hm1, 1.1 * r_hm1)
+
 
     fig.tight_layout()
     fig.savefig(
@@ -553,9 +631,11 @@ def generate_in_situ_gcs(
     plt.close(fig)
 
     print(
-    f"Maximum galactocentric radius of tagged GCs: "
-    f"{np.max(pos[drawn]):.2f} kpc "
-    f"(stellar half-mass radius = {r_hm1:.2f} kpc)")
+        f"Maximum galactocentric radius of tagged GCs: "
+        f"{np.max(pos[drawn]):.2f} kpc "
+        f"({reference_radius_label.lower()} = "
+        f"{reference_radius:.2f} kpc)"
+    )
 
     ###########################
 
