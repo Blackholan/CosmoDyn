@@ -5,8 +5,6 @@
 
 **CosmoDyn** is an open-source Python framework designed to reconstruct **time-dependent galactic potentials** from cosmological simulations and model the dynamical evolution of compact stellar systems such as **globular clusters (GCs)**, **nuclear star clusters (NSCs)** and **massive black holes (MBHs)**.
 
-It combines analytic gravitational potentials with orbital integration techniques to study the evolution of stellar systems in realistic galaxy assembly histories.
-
 ---
 
 ## Features
