@@ -302,6 +302,7 @@ def run_in_situ_dynamics(
     potential_file,
     output_file,
     plot_file=None,
+    density_potential_file=None,
     start_snapshot_index=8,
     end_snapshot_index=None,
     integration_method="dop853_c",
@@ -329,6 +330,11 @@ def run_in_situ_dynamics(
     ----------
     potential_mode : {"evolving", "static"}
         Use the time-dependent potential or one fixed snapshot potential.
+    density_potential_file : path-like or None
+        Smooth host-galaxy potential used for dynamical friction and tidal
+        mass loss. If None, ``potential_file`` is used. Set this to the
+        host-only MW potential when ``potential_file`` contains moving
+        satellites.
     df_model : {"none", "cdm", "fdm"}
         Dynamical-friction prescription.
     m22 : float
@@ -351,7 +357,11 @@ def run_in_situ_dynamics(
     """
     initial_conditions_file = Path(initial_conditions_file)
     timestep_file = Path(timestep_file)
-    potential_file = Path(potential_file)
+    orbit_potential_file = Path(potential_file)
+    if density_potential_file is None:
+        density_potential_file = orbit_potential_file
+    else:
+        density_potential_file = Path(density_potential_file)
     output_file = Path(output_file)
 
     if df_cache_directory is None:
@@ -382,7 +392,12 @@ def run_in_situ_dynamics(
             exist_ok=True,
         )
 
-    for path in (initial_conditions_file, timestep_file, potential_file):
+    for path in (
+        initial_conditions_file,
+        timestep_file,
+        orbit_potential_file,
+        density_potential_file,
+    ):
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
@@ -405,7 +420,7 @@ def run_in_situ_dynamics(
     if df_model == "fdm" and m22 <= 0:
         raise ValueError("m22 must be strictly positive.")
 
-    timestep_data = np.loadtxt(timestep_file)
+    timestep_data = np.atleast_2d(np.loadtxt(timestep_file))
     time_start = timestep_data[:, 0]
     time_end = timestep_data[:, 1]
     number_of_steps = timestep_data[:, 2].astype(int)
@@ -425,17 +440,33 @@ def run_in_situ_dynamics(
         for row in initial_conditions
     ]
 
-    with potential_file.open("rb") as stream:
+    with orbit_potential_file.open("rb") as stream:
         potentials = pickle.load(stream)
 
+    if density_potential_file == orbit_potential_file:
+        density_potentials = potentials
+    else:
+        with density_potential_file.open("rb") as stream:
+            density_potentials = pickle.load(stream)
+
     if end_snapshot_index is None:
-        end_snapshot_index = min(len(potentials), len(timestep_data))
+        if isinstance(potentials, dict):
+            if not potentials:
+                raise ValueError("The orbit-potential dictionary is empty.")
+            potential_end_index = max(potentials) + 1
+        else:
+            potential_end_index = len(timestep_data)
+        end_snapshot_index = min(
+            potential_end_index,
+            len(timestep_data),
+        )
     if not 0 <= start_snapshot_index < end_snapshot_index:
         raise ValueError(
             "start_snapshot_index must be smaller than end_snapshot_index."
         )
 
     static_potential = None
+    static_density_potential = None
 
     if potential_mode == "static":
 
@@ -462,6 +493,20 @@ def run_in_situ_dynamics(
             static_potential = potentials
 
         _set_non_dissipative(static_potential)
+
+        if isinstance(density_potentials, dict):
+            if static_potential_index not in density_potentials:
+                raise KeyError(
+                    f"static_potential_index={static_potential_index} "
+                    "is not available in the density potentials."
+                )
+            static_density_potential = density_potentials[
+                static_potential_index
+            ]
+        else:
+            static_density_potential = density_potentials
+
+        _set_non_dissipative(static_density_potential)
 
     potential_description = (
         f"static potential from index {static_potential_index}"
@@ -503,7 +548,7 @@ def run_in_situ_dynamics(
         elif potential_mode == "evolving":
             print(f"Computing one {df_model.upper()} DF force per snapshot.")
             for snapshot_index in range(start_snapshot_index, end_snapshot_index):
-                density_potential = potentials[snapshot_index]
+                density_potential = density_potentials[snapshot_index]
                 _set_non_dissipative(density_potential)
                 dynamical_friction_forces[snapshot_index] = _build_df_force(
                     df_model,
@@ -524,7 +569,7 @@ def run_in_situ_dynamics(
             print(f"Computing one static {df_model.upper()} DF force.")
             static_dynamical_friction_force = _build_df_force(
                 df_model,
-                static_potential,
+                static_density_potential,
                 gc_mass,
                 gc_half_mass_radius,
                 m22,
@@ -556,7 +601,7 @@ def run_in_situ_dynamics(
     vT_all = []
     vz_all = []
     mass_all = []
-    interval_potentials = []
+    density_interval_potentials = []
 
     gc_moving_potentials = (
         [dict() for _ in range(number_of_clusters)]
@@ -583,7 +628,14 @@ def run_in_situ_dynamics(
             else potentials[snapshot_index]
         )
         _set_non_dissipative(potential)
-        interval_potentials.append(potential)
+
+        density_potential = (
+            static_density_potential
+            if potential_mode == "static"
+            else density_potentials[snapshot_index]
+        )
+        _set_non_dissipative(density_potential)
+        density_interval_potentials.append(density_potential)
 
         if df_model == "none":
             force_template = None
@@ -615,7 +667,7 @@ def run_in_situ_dynamics(
                             snapshot_index
                         ] = _build_gc_moving_potential(
                             orbit=None,
-                            host_potential=potential,
+                            host_potential=density_potential,
                             gc_mass=current_masses[cluster_index],
                             gc_scale_radius=gc_potential_scale_radius,
                             active=False,
@@ -672,7 +724,7 @@ def run_in_situ_dynamics(
                         snapshot_index
                     ] = _build_gc_moving_potential(
                         orbit=orbit if current_mass > 0.0 else None,
-                        host_potential=potential,
+                        host_potential=density_potential,
                         gc_mass=current_mass,
                         gc_scale_radius=gc_potential_scale_radius,
                         active=(current_mass > 0.0),
@@ -719,7 +771,7 @@ def run_in_situ_dynamics(
                             snapshot_index
                         ] = _build_gc_moving_potential(
                             orbit=None,
-                            host_potential=potential,
+                            host_potential=density_potential,
                             gc_mass=current_masses[cluster_index],
                             gc_scale_radius=gc_potential_scale_radius,
                             active=False,
@@ -773,7 +825,7 @@ def run_in_situ_dynamics(
                                 snapshot_index
                             ] = _build_gc_moving_potential(
                                 orbit=orbit[local_index],
-                                host_potential=potential,
+                                host_potential=density_potential,
                                 gc_mass=potential_mass,
                                 gc_scale_radius=(
                                     gc_potential_scale_radius
@@ -831,7 +883,7 @@ def run_in_situ_dynamics(
                             snapshot_index
                         ] = _build_gc_moving_potential(
                             orbit=orbit[cluster_index],
-                            host_potential=potential,
+                            host_potential=density_potential,
                             gc_mass=potential_mass,
                             gc_scale_radius=gc_potential_scale_radius,
                         )
@@ -876,7 +928,12 @@ def run_in_situ_dynamics(
             )
 
         if mass_loss_mode == "coupled":
-            tidal_strength = _compute_tidal_strength_history(potential, x, y, z)
+            tidal_strength = _compute_tidal_strength_history(
+                density_potential,
+                x,
+                y,
+                z,
+            )
             interval_mass_history = _integrate_mass_loss_interval(
                 current_masses,
                 times_numeric,
@@ -963,14 +1020,16 @@ def run_in_situ_dynamics(
         print("Computing the mass-loss history after the orbit integration.")
         current_masses = np.full(number_of_clusters, gc_mass, dtype=float)
         mass_all = []
-        for interval_index, potential in enumerate(interval_potentials):
+        for interval_index, density_potential in enumerate(
+            density_interval_potentials
+        ):
             x_interval = x_all[interval_index]
             y_interval = y_all[interval_index]
             z_interval = z_all[interval_index]
             times_interval = times_all[interval_index]
 
             tidal_strength = _compute_tidal_strength_history(
-                potential,
+                density_potential,
                 x_interval,
                 y_interval,
                 z_interval,
@@ -1002,7 +1061,7 @@ def run_in_situ_dynamics(
         for cluster_index, potential_history in enumerate(
             gc_moving_potentials
         ):
-            potential_file = (
+            gc_potential_file = (
                 gc_moving_potential_directory
                 / (
                     f"GCpotInSitu_{potential_mode_tag}_"
@@ -1010,7 +1069,7 @@ def run_in_situ_dynamics(
                 )
             )
 
-            with potential_file.open("wb") as stream:
+            with gc_potential_file.open("wb") as stream:
                 pickle.dump(
                     potential_history,
                     stream,
@@ -1018,7 +1077,7 @@ def run_in_situ_dynamics(
                 )
 
             gc_moving_potential_files.append(
-                str(potential_file)
+                str(gc_potential_file)
             )
 
         print(
@@ -1043,6 +1102,12 @@ def run_in_situ_dynamics(
         h5.create_dataset("Time", data=time_output)
 
         h5.attrs["potential_mode"] = potential_mode
+        h5.attrs["orbit_potential_file"] = str(
+            orbit_potential_file
+        )
+        h5.attrs["density_potential_file"] = str(
+            density_potential_file
+        )
         h5.attrs["df_model"] = df_model
         h5.attrs["mass_loss_mode"] = mass_loss_mode
         h5.attrs["initial_gc_mass_msun"] = gc_mass
@@ -1092,6 +1157,8 @@ def run_in_situ_dynamics(
         "captured": captured,
         "central_capture_radius": central_capture_radius,
         "potential_mode": potential_mode,
+        "orbit_potential_file": str(orbit_potential_file),
+        "density_potential_file": str(density_potential_file),
         "df_model": df_model,
         "mass_loss_mode": mass_loss_mode,
         "m22": m22 if df_model == "fdm" else None,

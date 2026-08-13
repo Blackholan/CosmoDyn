@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+# coding: utf-8
+import numpy as np
+
+from cosmodyn.pipeline import run_pipeline
+
+
+# ==========================================================
+# 1. RUN SELECTION
+# ==========================================================
+
+GALAXY_IDS = [462710]
+# GALAXY_IDS = [613192, 462710]
+# GALAXY_IDS = np.loadtxt("GalaxyList.txt", dtype=int).tolist()
+
+CONTINUE_ON_ERROR = True
+
+# "in_situ": in-situ GCs only
+# "ex_situ": ex-situ GCs only
+# "full":    in-situ + ex-situ GCs
+# "custom":  use the individual stage switches at the end of this file
+RUN_MODE = "full"
+
+# Generate and integrate streams for the populations selected by RUN_MODE.
+ENABLE_STREAMS = False
+
+
+# ==========================================================
+# 2. INITIAL CONDITIONS
+# ==========================================================
+
+SNAPSHOT_INDEX = 0
+NGC = 1                  # 0 = use the halo-mass relation
+ALPHA = 3                # used only when NGC = 0
+CIRCULARITY_THRESHOLD = 0.6 # None
+TAGGING_RADIUS_FACTOR = 3 
+MINIMUM_TAGGING_RADIUS = 0.5  # kpc; None disables the constraint
+
+N_ITER = 20
+N_PARTICLES_PER_COMPONENT = 100_000
+RANDOM_SEED = None       # for example 42 for reproducible sampling
+KEEP_AGAMA_FILE = True
+
+
+# ==========================================================
+# 3. DYNAMICS — SHARED BY IN-SITU AND EX-SITU GCs
+# ==========================================================
+
+END_SNAPSHOT_INDEX = 30  # None = integrate to the final snapshot
+INTEGRATION_METHOD = "dop853_c"
+TIMESTEP_FILE = "TimeStepGTNG50.txt"
+
+POTENTIAL_MODE = "evolving"  # "evolving" or "static"
+STATIC_POTENTIAL_INDEX = 73   # used only with POTENTIAL_MODE = "static"
+
+# Include the gravitational field of moving satellite galaxies
+# in the orbital potential of the in-situ and/or ex-situ GCs.
+INCLUDE_MOVING_SATELLITES = False
+
+DF_MODEL = "cdm"             # "none", "cdm" or "fdm"
+M22 = 1                       # used only with DF_MODEL = "fdm"
+
+GC_MASS = 1e6                  # Msun
+GC_HALF_MASS_RADIUS = 0.01     # kpc
+CENTRAL_CAPTURE_RADIUS = 0.01  # kpc
+
+MASS_LOSS_MODE = "none"  # "none", "postprocess" or "coupled"
+
+
+# ==========================================================
+# 4. OPTIONAL EX-SITU OVERRIDES
+# Ignored in RUN_MODE = "in_situ".
+# ==========================================================
+
+NGC_EX_SITU = NGC
+ALPHA_EX_SITU = ALPHA
+MAXIMUM_SATELLITE_RADIUS = 1000.0  # kpc
+RELEASE_ENERGY_TOLERANCE = 0.0
+
+
+# ==========================================================
+# 5. OPTIONAL STREAM PARAMETERS
+# Used only when ENABLE_STREAMS = True.
+# ==========================================================
+
+N_STREAM_PARTICLES = 100
+N_STREAM_ITER = 30
+OVERWRITE_STREAM_ICS = False
+STREAM_N_JOBS = -1
+STREAM_BATCH_SIZE = 64
+
+
+# ==========================================================
+# 6. CUSTOM STAGES — USED ONLY WITH RUN_MODE = "custom"
+# ==========================================================
+
+RUN_ICS = False
+RUN_EX_SITU_ICS = False
+RUN_EX_SITU_SATELLITES = False
+RUN_IN_SITU_DYNAMICS = False
+RUN_EX_SITU_DYNAMICS = False
+RUN_STREAM_ICS = False
+RUN_IN_SITU_STREAMS = False
+RUN_EX_SITU_STREAMS = False
+
+
+if __name__ == "__main__":
+    run_pipeline(locals())

@@ -273,7 +273,7 @@ def run_in_situ_streams(
         plot_directory = Path(plot_directory)
         plot_directory.mkdir(parents=True, exist_ok=True)
 
-    timestep_data = np.loadtxt(timestep_file)
+    timestep_data = np.atleast_2d(np.loadtxt(timestep_file))
     time_start = timestep_data[:, 0]
     time_end = timestep_data[:, 1]
     number_of_steps = timestep_data[:, 2].astype(int)

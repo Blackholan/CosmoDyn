@@ -203,6 +203,7 @@ def _select_circular_candidates(
     vz,
     potential,
     circularity_threshold,
+    minimum_tagging_radius,
 ):
     """Apply the same E-Lz circularity selection as the in-situ code."""
 
@@ -343,18 +344,49 @@ def _select_circular_candidates(
         energy
     )
 
-    selected = np.where(
-        np.isfinite(lcirc_particles)
-        & (
-            angular_momentum_z
-            >= circularity_threshold
-            * lcirc_particles
+    if minimum_tagging_radius is None:
+        radial_selection = np.ones(
+            len(position),
+            dtype=bool,
         )
-        & (
-            angular_momentum_z
-            <= lcirc_particles
+    else:
+        if minimum_tagging_radius < 0.0:
+            raise ValueError(
+                "minimum_tagging_radius must be non-negative "
+                "or None."
+            )
+
+        radial_selection = (
+            position >= minimum_tagging_radius
         )
-    )[0]
+
+    if circularity_threshold is None:
+        # No circularity selection.
+        selected = np.where(
+            np.isfinite(energy)
+            & np.isfinite(angular_momentum_z)
+            & radial_selection
+        )[0]
+    else:
+        if not 0.0 <= circularity_threshold <= 1.0:
+            raise ValueError(
+                "circularity_threshold must be between 0 and 1, "
+                "or None."
+            )
+
+        selected = np.where(
+            np.isfinite(lcirc_particles)
+            & (
+                angular_momentum_z
+                >= circularity_threshold
+                * lcirc_particles
+            )
+            & (
+                angular_momentum_z
+                <= lcirc_particles
+            )
+            & radial_selection
+        )[0]
 
     phase_space = {
         "position": position,
@@ -380,6 +412,7 @@ def generate_ex_situ_gcs(
     ngc=0,
     alpha=5,
     tagging_radius_factor=1.0,
+    minimum_tagging_radius=None,
     circularity_threshold=0.6,
     n_iter=20,
     n_particles_per_component=1_000_000,
@@ -708,11 +741,12 @@ def generate_ex_situ_gcs(
                 vx=vx,
                 vy=vy,
                 vz=vz,
-                potential=(
-                    satellite_potential
-                ),
+                potential=satellite_potential,
                 circularity_threshold=(
                     circularity_threshold
+                ),
+                minimum_tagging_radius=(
+                    minimum_tagging_radius
                 ),
             )
         )
