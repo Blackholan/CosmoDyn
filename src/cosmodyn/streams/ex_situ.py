@@ -256,10 +256,14 @@ def run_ex_situ_streams(
     integration_method="dop853_c",
     n_jobs=-1,
     batch_size=64,
+    object_type="GC",
 ):
-    """Generate and evolve one tidal stream for every ex-situ GC."""
+    """Generate and evolve one tidal stream for every ex-situ object."""
     start_clock = time.time()
     galaxy_id = int(galaxy_id)
+    object_type = str(object_type).strip().upper()
+    if object_type not in {"GC", "NSC"}:
+        raise ValueError("object_type must be 'GC' or 'NSC'.")
     plummer_file = Path(plummer_file)
     timestep_file = Path(timestep_file)
     host_potential_file = Path(host_potential_file)
@@ -296,14 +300,18 @@ def run_ex_situ_streams(
         for satellite_name in satellite_names:
             satellite_id = int(satellite_name.split("_")[1])
             satellite_group = dynamics_h5[satellite_name]
-            gc_names = sorted(
-                (name for name in satellite_group if name.startswith("GC_")),
+            object_names = sorted(
+                (
+                    name
+                    for name in satellite_group
+                    if name.startswith(f"{object_type}_")
+                ),
                 key=lambda name: int(name.split("_")[1]),
             )
 
-            for gc_name in gc_names:
-                cluster_index = int(gc_name.split("_")[1])
-                gc_group = satellite_group[gc_name]
+            for object_name in object_names:
+                cluster_index = int(object_name.split("_")[1])
+                gc_group = satellite_group[object_name]
                 gc_time = np.asarray(gc_group["time"][:])
                 gc_snapshot = np.asarray(gc_group["snapshot"][:], dtype=int)
                 gc_x = np.asarray(gc_group["x"][:])
@@ -324,7 +332,8 @@ def run_ex_situ_streams(
                 )
                 if not potential_file.exists():
                     raise FileNotFoundError(
-                        f"GC moving-potential file not found: {potential_file}"
+                        f"{object_type} moving-potential file not found: "
+                        f"{potential_file}"
                     )
                 with potential_file.open("rb") as stream:
                     potential_history = pickle.load(stream)
@@ -341,7 +350,7 @@ def run_ex_situ_streams(
                 print("\n" + "=" * 70)
                 print(
                     f"Ex-situ stream: G{galaxy_id}, satellite {satellite_id}, "
-                    f"GC {cluster_index}"
+                    f"{object_type} {cluster_index}"
                 )
                 print("=" * 70)
 
@@ -394,7 +403,10 @@ def run_ex_situ_streams(
                         delayed(process_particle)(index)
                         for index in tqdm(
                             range(number_of_particles),
-                            desc=f"Sat {satellite_id} GC {cluster_index} S{snapshot}",
+                            desc=(
+                                f"Sat {satellite_id} {object_type} "
+                                f"{cluster_index} S{snapshot}"
+                            ),
                             unit="part",
                         )
                     )
@@ -422,7 +434,7 @@ def run_ex_situ_streams(
                 final_y = final_rows[:, 0] * np.sin(final_rows[:, 5])
                 output_file = output_directory / (
                     f"ExSituStream_G{galaxy_id}_Sat{satellite_id}_"
-                    f"GC{cluster_index}.h5"
+                    f"{object_type}{cluster_index}.h5"
                 )
                 with h5py.File(output_file, "w") as h5:
                     group = h5.create_group("StreamData")
@@ -433,17 +445,28 @@ def run_ex_situ_streams(
                     group.create_dataset("vT", data=final_rows[:, 2])
                     group.create_dataset("vz", data=final_rows[:, 4])
                     group.create_dataset(
-                        "UnboundFromGC", data=particle_unbound.astype(np.uint8)
+                        "UnboundFromObject",
+                        data=particle_unbound.astype(np.uint8),
+                    )
+                    group.create_dataset(
+                        f"UnboundFrom{object_type}",
+                        data=particle_unbound.astype(np.uint8),
                     )
                     group.create_dataset("ReleaseSnapshot", data=release_snapshot)
                     group.create_dataset("ReleaseSample", data=release_sample)
                     group.create_dataset(
-                        "ReleasedByGCDisappearance",
+                        "ReleasedByObjectDisappearance",
+                        data=released_by_gc_disappearance.astype(np.uint8),
+                    )
+                    group.create_dataset(
+                        f"ReleasedBy{object_type}Disappearance",
                         data=released_by_gc_disappearance.astype(np.uint8),
                     )
                     h5.attrs["galaxy_id"] = galaxy_id
                     h5.attrs["satellite_id"] = satellite_id
-                    h5.attrs["gc_index"] = cluster_index
+                    h5.attrs["object_index"] = cluster_index
+                    h5.attrs["object_type"] = object_type
+                    h5.attrs[f"{object_type.lower()}_index"] = cluster_index
                     h5.attrs["potential_mode"] = potential_mode
                     h5.attrs["df_model"] = df_model
                     h5.attrs["mass_loss_mode"] = mass_loss_mode
@@ -454,17 +477,29 @@ def run_ex_situ_streams(
                 if plot_directory is not None:
                     plt.figure(figsize=(6, 6))
                     plt.scatter(final_x, final_y, s=0.1, alpha=0.7)
-                    plt.scatter(gc_x[-1], gc_y[-1], s=18, marker="*", label="GC")
+                    plt.scatter(
+                        gc_x[-1],
+                        gc_y[-1],
+                        s=18,
+                        marker="*",
+                        label=object_type,
+                    )
                     plt.xlabel("X [kpc]")
                     plt.ylabel("Y [kpc]")
                     plt.legend(loc="best")
                     plt.tight_layout()
                     plt.savefig(
                         plot_directory
-                        / f"ExSituStream_G{galaxy_id}_Sat{satellite_id}_GC{cluster_index}.png",
+                        / (
+                            f"ExSituStream_G{galaxy_id}_Sat{satellite_id}_"
+                            f"{object_type}{cluster_index}.png"
+                        ),
                         dpi=200,
                     )
                     plt.close()
 
-    print(f"All ex-situ streams completed in {time.time() - start_clock:.2f} s.")
+    print(
+        f"All ex-situ {object_type} streams completed in "
+        f"{time.time() - start_clock:.2f} s."
+    )
     return output_files

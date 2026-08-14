@@ -8,7 +8,11 @@ import numpy as np
 
 from cosmodyn import (
     generate_ex_situ_gcs,
+    generate_ex_situ_nscs,
+    generate_ex_situ_bhs,
     generate_in_situ_gcs,
+    generate_in_situ_nsc,
+    generate_in_situ_bh,
     generate_plummer_gc,
     prepare_ex_situ_satellites,
     run_ex_situ_dynamics,
@@ -28,6 +32,8 @@ DEFAULT_PARAMETERS = {
     "CONTINUE_ON_ERROR": True,
     "RUN_MODE": "in_situ",
     "ENABLE_STREAMS": False,
+    "ENABLE_NSC_STREAMS": False,
+    "ENABLE_BHS": False,
 
     # Stage switches used only by RUN_MODE = "custom"
     "RUN_ICS": False,
@@ -38,6 +44,13 @@ DEFAULT_PARAMETERS = {
     "RUN_STREAM_ICS": False,
     "RUN_IN_SITU_STREAMS": False,
     "RUN_EX_SITU_STREAMS": False,
+    "RUN_NSC_STREAM_ICS": False,
+    "RUN_IN_SITU_NSC_STREAMS": False,
+    "RUN_EX_SITU_NSC_STREAMS": False,
+    "RUN_IN_SITU_BH_ICS": False,
+    "RUN_EX_SITU_BH_ICS": False,
+    "RUN_IN_SITU_BH_DYNAMICS": False,
+    "RUN_EX_SITU_BH_DYNAMICS": False,
 
     # In-situ ICs
     "SNAPSHOT_INDEX": 0,
@@ -50,6 +63,23 @@ DEFAULT_PARAMETERS = {
     "N_PARTICLES_PER_COMPONENT": 100_000,
     "RANDOM_SEED": None,
     "KEEP_AGAMA_FILE": True,
+
+    # Nuclear star clusters
+    "ENABLE_NSCS": False,
+    "RUN_IN_SITU_NSC_ICS": False,
+    "RUN_EX_SITU_NSC_ICS": False,
+    "RUN_IN_SITU_NSC_DYNAMICS": False,
+    "RUN_EX_SITU_NSC_DYNAMICS": False,
+    "NSC_INITIAL_RADIUS": 0.001,
+    "NSC_MASS": 1e7,
+    "NSC_HALF_MASS_RADIUS": 0.005,
+    "NSC_CENTRAL_CAPTURE_RADIUS": 0.0001,
+    "GENERATE_NSC_MOVING_POTENTIALS": False,
+
+    # Black holes
+    "BH_INITIAL_RADIUS": 0.001,
+    "BH_MASS": 1e7,
+    "BH_CENTRAL_CAPTURE_RADIUS": 0.0001,
 
     # Ex-situ ICs
     "NGC_EX_SITU": 0,
@@ -120,6 +150,12 @@ def run_pipeline(configuration):
         use_in_situ = run_mode in {"in_situ", "full"}
         use_ex_situ = run_mode in {"ex_situ", "full"}
         use_streams = bool(parameters["ENABLE_STREAMS"])
+        use_nscs = bool(parameters["ENABLE_NSCS"])
+        use_bhs = bool(parameters["ENABLE_BHS"])
+        use_nsc_streams = (
+            bool(parameters["ENABLE_NSC_STREAMS"])
+            and use_nscs
+        )
 
         use_moving_satellites = bool(
             parameters["INCLUDE_MOVING_SATELLITES"]
@@ -137,6 +173,37 @@ def run_pipeline(configuration):
 
             RUN_IN_SITU_DYNAMICS=use_in_situ,
             RUN_EX_SITU_DYNAMICS=use_ex_situ,
+            RUN_IN_SITU_NSC_ICS=(
+                use_nscs and use_in_situ
+            ),
+            RUN_EX_SITU_NSC_ICS=(
+                use_nscs and use_ex_situ
+            ),
+            RUN_IN_SITU_BH_ICS=(
+                use_bhs and use_in_situ
+            ),
+            RUN_EX_SITU_BH_ICS=(
+                use_bhs and use_ex_situ
+            ),
+            RUN_IN_SITU_BH_DYNAMICS=(
+                use_bhs and use_in_situ
+            ),
+            RUN_EX_SITU_BH_DYNAMICS=(
+                use_bhs and use_ex_situ
+            ),
+            RUN_IN_SITU_NSC_DYNAMICS=(
+                use_nscs and use_in_situ
+            ),
+            RUN_EX_SITU_NSC_DYNAMICS=(
+                use_nscs and use_ex_situ
+            ),
+            RUN_NSC_STREAM_ICS=use_nsc_streams,
+            RUN_IN_SITU_NSC_STREAMS=(
+                use_nsc_streams and use_in_situ
+            ),
+            RUN_EX_SITU_NSC_STREAMS=(
+                use_nsc_streams and use_ex_situ
+            ),
             RUN_STREAM_ICS=use_streams,
             RUN_IN_SITU_STREAMS=(
                 use_streams and use_in_situ
@@ -145,6 +212,12 @@ def run_pipeline(configuration):
                 use_streams and use_ex_situ
             ),
         )
+
+    parameters["GENERATE_NSC_MOVING_POTENTIALS"] = bool(
+        parameters["ENABLE_NSC_STREAMS"]
+        or parameters["RUN_IN_SITU_NSC_STREAMS"]
+        or parameters["RUN_EX_SITU_NSC_STREAMS"]
+    )
 
     # Copy only declared parameters.
     # Imports and unrelated launcher variables are ignored.
@@ -167,6 +240,15 @@ def run_pipeline(configuration):
         / (
             f"GCPlummer_M{GC_MASS:.0e}"
             f"_R{GC_HALF_MASS_RADIUS}"
+            f"_N{N_STREAM_PARTICLES:.0e}.h5"
+        )
+    )
+
+    NSC_PLUMMER_FILE = (
+        GLOBAL_OUTPUT_DIR
+        / (
+            f"NSCPlummer_M{NSC_MASS:.0e}"
+            f"_R{NSC_HALF_MASS_RADIUS}"
             f"_N{N_STREAM_PARTICLES:.0e}.h5"
         )
     )
@@ -247,6 +329,28 @@ def run_pipeline(configuration):
             n_cpus=1,
         )
 
+    if RUN_NSC_STREAM_ICS:
+        stage_start = start_stage_timer()
+
+        generate_plummer_gc(
+            output_file=NSC_PLUMMER_FILE,
+            gc_mass=NSC_MASS,
+            gc_half_mass_radius=NSC_HALF_MASS_RADIUS,
+            n_particles=N_STREAM_PARTICLES,
+            n_iter=N_STREAM_ITER,
+            overwrite=OVERWRITE_STREAM_ICS,
+        )
+
+        record_stage_timing(
+            records=TIMING_RECORDS,
+            galaxy_id=-1,
+            stage="RUN_NSC_STREAM_ICS",
+            start_time=stage_start,
+            n_gcs=1,
+            n_particles=N_STREAM_PARTICLES,
+            n_cpus=1,
+        )
+
     def run_galaxy(galaxy_id):
         """Run the selected pipeline stages for one galaxy."""
 
@@ -297,18 +401,36 @@ def run_pipeline(configuration):
             / "Plots"
         )
 
-        IN_SITU_OUTPUT_DIR.mkdir(
-            parents=True,
-            exist_ok=True,
+        # Create the GC in-situ tree only when a GC in-situ stage is enabled.
+        # NSC-only runs use Outputs/G<ID>/NSC/InSitu and must not leave an
+        # empty Outputs/G<ID>/InSitu directory behind.
+        run_gc_in_situ_stage = any(
+            (
+                RUN_ICS,
+                RUN_IN_SITU_DYNAMICS,
+                RUN_IN_SITU_STREAMS,
+            )
         )
-        IN_SITU_AGAMA_DIR.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-        IN_SITU_PLOT_DIR.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+
+        if run_gc_in_situ_stage:
+            IN_SITU_OUTPUT_DIR.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+        # AGAMA is used only to generate the GC initial conditions.
+        if RUN_ICS:
+            IN_SITU_AGAMA_DIR.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+        # GC plots are produced by the GC IC, dynamics and stream stages.
+        if run_gc_in_situ_stage:
+            IN_SITU_PLOT_DIR.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
         AGAMA_FILE = (
             IN_SITU_AGAMA_DIR
@@ -375,6 +497,100 @@ def run_pipeline(configuration):
                 f"InSituRadiusEvolution_"
                 f"{MODE_TAG}_G{galaxy_id}.png"
             )
+        )
+
+        # ==========================================================
+        # In-situ NSC outputs
+        # ==========================================================
+
+        NSC_OUTPUT_DIR = OUTPUT_DIR / "NSC" / "InSitu"
+        NSC_PLOT_DIR = NSC_OUTPUT_DIR / "Plots"
+        NSC_DF_CACHE_DIRECTORY = (
+            NSC_OUTPUT_DIR / "DynamicalFrictionForce"
+        )
+        NSC_MOVING_POTENTIAL_DIRECTORY = (
+            NSC_OUTPUT_DIR / "MovingPotential"
+        )
+        NSC_STREAM_OUTPUT_DIRECTORY = (
+            NSC_OUTPUT_DIR / f"Streams_{MODE_TAG}"
+        )
+        NSC_STREAM_PLOT_DIRECTORY = (
+            NSC_OUTPUT_DIR / "Plots" / f"Streams_{MODE_TAG}"
+        )
+
+        EX_SITU_NSC_OUTPUT_DIRECTORY = (
+            OUTPUT_DIR / "NSC" / "ExSitu"
+        )
+        EX_SITU_NSC_RETAINED_SATELLITES_FILE = (
+            EX_SITU_NSC_OUTPUT_DIRECTORY
+            / f"ExSituNSCSatellitesG{galaxy_id}.txt"
+        )
+        EX_SITU_NSC_DYNAMICS_OUTPUT_FILE = (
+            EX_SITU_NSC_OUTPUT_DIRECTORY
+            / f"ExSituNSCDynamics_{MODE_TAG}_G{galaxy_id}.h5"
+        )
+        EX_SITU_NSC_DYNAMICS_PLOT_FILE = (
+            EX_SITU_NSC_OUTPUT_DIRECTORY
+            / "Plots"
+            / f"ExSituNSCRadiusEvolution_{MODE_TAG}_G{galaxy_id}.png"
+        )
+        EX_SITU_NSC_MOVING_POTENTIAL_DIRECTORY = (
+            EX_SITU_NSC_OUTPUT_DIRECTORY / "MovingPotential"
+        )
+        EX_SITU_NSC_STREAM_OUTPUT_DIRECTORY = (
+            EX_SITU_NSC_OUTPUT_DIRECTORY / f"Streams_{MODE_TAG}"
+        )
+        EX_SITU_NSC_STREAM_PLOT_DIRECTORY = (
+            EX_SITU_NSC_OUTPUT_DIRECTORY
+            / "Plots"
+            / f"Streams_{MODE_TAG}"
+        )
+        NSC_INITIAL_CONDITIONS_FILE = (
+            NSC_OUTPUT_DIR / f"IniNSCG{galaxy_id}.txt"
+        )
+        NSC_DYNAMICS_OUTPUT_FILE = (
+            NSC_OUTPUT_DIR
+            / f"InSituNSCDynamics_{MODE_TAG}_G{galaxy_id}.h5"
+        )
+        NSC_DYNAMICS_PLOT_FILE = (
+            NSC_PLOT_DIR
+            / f"InSituNSCRadiusEvolution_{MODE_TAG}_G{galaxy_id}.png"
+        )
+
+        # ==========================================================
+        # Black-hole outputs
+        # ==========================================================
+
+        BH_IN_SITU_OUTPUT_DIRECTORY = OUTPUT_DIR / "BH" / "InSitu"
+        BH_EX_SITU_OUTPUT_DIRECTORY = OUTPUT_DIR / "BH" / "ExSitu"
+
+        BH_INITIAL_CONDITIONS_FILE = (
+            BH_IN_SITU_OUTPUT_DIRECTORY / f"IniBHG{galaxy_id}.txt"
+        )
+        EX_SITU_BH_RETAINED_SATELLITES_FILE = (
+            BH_EX_SITU_OUTPUT_DIRECTORY
+            / f"ExSituBHSatellitesG{galaxy_id}.txt"
+        )
+        BH_IN_SITU_DYNAMICS_OUTPUT_FILE = (
+            BH_IN_SITU_OUTPUT_DIRECTORY
+            / f"InSituBHDynamics_{MODE_TAG}_G{galaxy_id}.h5"
+        )
+        BH_IN_SITU_DYNAMICS_PLOT_FILE = (
+            BH_IN_SITU_OUTPUT_DIRECTORY
+            / "Plots"
+            / f"InSituBHRadiusEvolution_{MODE_TAG}_G{galaxy_id}.png"
+        )
+        BH_IN_SITU_DF_CACHE_DIRECTORY = (
+            BH_IN_SITU_OUTPUT_DIRECTORY / "DynamicalFrictionForce"
+        )
+        BH_EX_SITU_DYNAMICS_OUTPUT_FILE = (
+            BH_EX_SITU_OUTPUT_DIRECTORY
+            / f"ExSituBHDynamics_{MODE_TAG}_G{galaxy_id}.h5"
+        )
+        BH_EX_SITU_DYNAMICS_PLOT_FILE = (
+            BH_EX_SITU_OUTPUT_DIRECTORY
+            / "Plots"
+            / f"ExSituBHRadiusEvolution_{MODE_TAG}_G{galaxy_id}.png"
         )
 
         # ==========================================================
@@ -514,9 +730,119 @@ def run_pipeline(configuration):
                 n_cpus=1,
             )
 
-        if number_of_gcs is None:
+        if number_of_gcs is None and any(
+            (
+                RUN_IN_SITU_DYNAMICS,
+                RUN_IN_SITU_STREAMS,
+            )
+        ):
             number_of_gcs = _read_number_of_gcs(
                 OUTPUT_FILE
+            )
+        elif number_of_gcs is None:
+            number_of_gcs = 0
+
+        # ==========================================================
+        # Generate the in-situ NSC initial condition
+        # ==========================================================
+
+        if RUN_IN_SITU_NSC_ICS:
+            stage_start = start_stage_timer()
+
+            generate_in_situ_nsc(
+                mwpots_path=MWPOTS_PATH,
+                output_file=NSC_INITIAL_CONDITIONS_FILE,
+                snapshot_index=SNAPSHOT_INDEX,
+                initial_radius=NSC_INITIAL_RADIUS,
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_IN_SITU_NSC_ICS",
+                start_time=stage_start,
+                n_gcs=1,
+                n_particles=None,
+                n_cpus=1,
+            )
+
+        # ==========================================================
+        # Generate one ex-situ NSC per satellite
+        # ==========================================================
+
+        if RUN_EX_SITU_NSC_ICS:
+            stage_start = start_stage_timer()
+
+            ex_situ_nsc_results = generate_ex_situ_nscs(
+                galaxy_id=galaxy_id,
+                satellites_file=SATELLITES_FILE,
+                satellite_data_directory=SATELLITE_DATA_DIRECTORY,
+                output_directory=EX_SITU_NSC_OUTPUT_DIRECTORY,
+                snapshot_index=SNAPSHOT_INDEX,
+                initial_radius=NSC_INITIAL_RADIUS,
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_EX_SITU_NSC_ICS",
+                start_time=stage_start,
+                n_gcs=len(ex_situ_nsc_results["generated_files"]),
+                n_particles=None,
+                n_cpus=1,
+            )
+
+        # ==========================================================
+        # Generate the in-situ black-hole initial condition
+        # ==========================================================
+
+        if RUN_IN_SITU_BH_ICS:
+            stage_start = start_stage_timer()
+
+            generate_in_situ_bh(
+                mwpots_path=MWPOTS_PATH,
+                host_data_file=MWDATA_PATH,
+                output_file=BH_INITIAL_CONDITIONS_FILE,
+                snapshot_index=SNAPSHOT_INDEX,
+                initial_radius=BH_INITIAL_RADIUS,
+                bh_mass=BH_MASS,
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_IN_SITU_BH_ICS",
+                start_time=stage_start,
+                n_gcs=1,
+                n_particles=None,
+                n_cpus=1,
+            )
+
+        # ==========================================================
+        # Generate one ex-situ black hole per satellite
+        # ==========================================================
+
+        if RUN_EX_SITU_BH_ICS:
+            stage_start = start_stage_timer()
+
+            ex_situ_bh_results = generate_ex_situ_bhs(
+                galaxy_id=galaxy_id,
+                satellites_file=SATELLITES_FILE,
+                satellite_data_directory=SATELLITE_DATA_DIRECTORY,
+                output_directory=BH_EX_SITU_OUTPUT_DIRECTORY,
+                snapshot_index=SNAPSHOT_INDEX,
+                initial_radius=BH_INITIAL_RADIUS,
+                bh_mass=BH_MASS,
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_EX_SITU_BH_ICS",
+                start_time=stage_start,
+                n_gcs=len(ex_situ_bh_results["generated_files"]),
+                n_particles=None,
+                n_cpus=1,
             )
 
         # ==========================================================
@@ -687,6 +1013,58 @@ def run_pipeline(configuration):
             )
 
         # ==========================================================
+        # Run the in-situ NSC dynamics
+        # ==========================================================
+
+        if RUN_IN_SITU_NSC_DYNAMICS:
+            stage_start = start_stage_timer()
+
+            run_in_situ_dynamics(
+                initial_conditions_file=NSC_INITIAL_CONDITIONS_FILE,
+                timestep_file=TIMESTEP_FILE,
+                potential_file=IN_SITU_ORBIT_POTENTIAL_FILE,
+                density_potential_file=MWPOTS_PATH,
+                output_file=NSC_DYNAMICS_OUTPUT_FILE,
+                plot_file=NSC_DYNAMICS_PLOT_FILE,
+                start_snapshot_index=SNAPSHOT_INDEX,
+                end_snapshot_index=END_SNAPSHOT_INDEX,
+                integration_method=INTEGRATION_METHOD,
+                potential_mode=POTENTIAL_MODE,
+                df_model=DF_MODEL,
+                static_potential_index=STATIC_POTENTIAL_INDEX,
+                gc_mass=NSC_MASS,
+                gc_half_mass_radius=NSC_HALF_MASS_RADIUS,
+                m22=M22,
+                df_cache_directory=NSC_DF_CACHE_DIRECTORY,
+                reuse_df_cache=REUSE_DF_CACHE,
+                mass_loss_mode=MASS_LOSS_MODE,
+                mass_loss_gamma=MASS_LOSS_GAMMA,
+                tidal_strength_reference=TIDAL_STRENGTH_REFERENCE,
+                dissolution_time_normalization=(
+                    DISSOLUTION_TIME_NORMALIZATION
+                ),
+                central_capture_radius=NSC_CENTRAL_CAPTURE_RADIUS,
+                generate_gc_moving_potentials=(
+                    GENERATE_NSC_MOVING_POTENTIALS
+                ),
+                gc_moving_potential_directory=(
+                    NSC_MOVING_POTENTIAL_DIRECTORY
+                ),
+                gc_potential_scale_radius=NSC_HALF_MASS_RADIUS,
+                object_type="NSC",
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_IN_SITU_NSC_DYNAMICS",
+                start_time=stage_start,
+                n_gcs=1,
+                n_particles=None,
+                n_cpus=N_CPUS,
+            )
+
+        # ==========================================================
         # Run the ex-situ dynamics
         # ==========================================================
 
@@ -789,7 +1167,7 @@ def run_pipeline(configuration):
 
             number_of_ex_situ_gcs = (
                 ex_situ_dynamics_results[
-                    "number_of_clusters"
+                    "number_of_objects"
                 ]
             )
 
@@ -799,6 +1177,158 @@ def run_pipeline(configuration):
                 stage="RUN_EX_SITU_DYNAMICS",
                 start_time=stage_start,
                 n_gcs=number_of_ex_situ_gcs,
+                n_particles=None,
+                n_cpus=1,
+            )
+
+        # ==========================================================
+        # Run the ex-situ NSC dynamics
+        # ==========================================================
+
+        if RUN_EX_SITU_NSC_DYNAMICS:
+            stage_start = start_stage_timer()
+
+            ex_situ_nsc_dynamics_results = run_ex_situ_dynamics(
+                galaxy_id=galaxy_id,
+                satellites_file=EX_SITU_NSC_RETAINED_SATELLITES_FILE,
+                initial_conditions_directory=EX_SITU_NSC_OUTPUT_DIRECTORY,
+                satellite_trajectory_file=EX_SITU_SATELLITE_TRAJECTORY_FILE,
+                satellite_potential_directory=(
+                    EX_SITU_SATELLITE_POTENTIAL_DIRECTORY
+                ),
+                timestep_file=TIMESTEP_FILE,
+                host_orbit_potential_file=IN_SITU_ORBIT_POTENTIAL_FILE,
+                host_density_potential_file=MWPOTS_PATH,
+                output_file=EX_SITU_NSC_DYNAMICS_OUTPUT_FILE,
+                plot_file=EX_SITU_NSC_DYNAMICS_PLOT_FILE,
+                start_snapshot_index=SNAPSHOT_INDEX,
+                end_snapshot_index=END_SNAPSHOT_INDEX,
+                integration_method=INTEGRATION_METHOD,
+                potential_mode=POTENTIAL_MODE,
+                static_potential_index=STATIC_POTENTIAL_INDEX,
+                df_model=DF_MODEL,
+                gc_mass=NSC_MASS,
+                gc_half_mass_radius=NSC_HALF_MASS_RADIUS,
+                m22=M22,
+                mass_loss_mode=MASS_LOSS_MODE,
+                mass_loss_gamma=MASS_LOSS_GAMMA,
+                tidal_strength_reference=TIDAL_STRENGTH_REFERENCE,
+                dissolution_time_normalization=(
+                    DISSOLUTION_TIME_NORMALIZATION
+                ),
+                central_capture_radius=NSC_CENTRAL_CAPTURE_RADIUS,
+                release_energy_tolerance=RELEASE_ENERGY_TOLERANCE,
+                generate_gc_moving_potentials=(
+                    GENERATE_NSC_MOVING_POTENTIALS
+                ),
+                gc_moving_potential_directory=(
+                    EX_SITU_NSC_MOVING_POTENTIAL_DIRECTORY
+                ),
+                gc_potential_scale_radius=NSC_HALF_MASS_RADIUS,
+                object_type="NSC",
+                initial_conditions_filename_template=(
+                    "IniG{galaxy_id}Sat{satellite_id}NSC.txt"
+                ),
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_EX_SITU_NSC_DYNAMICS",
+                start_time=stage_start,
+                n_gcs=ex_situ_nsc_dynamics_results["number_of_objects"],
+                n_particles=None,
+                n_cpus=1,
+            )
+
+        # ==========================================================
+        # Run the in-situ black-hole dynamics
+        # ==========================================================
+
+        if RUN_IN_SITU_BH_DYNAMICS:
+            stage_start = start_stage_timer()
+
+            in_situ_bh_dynamics_results = run_in_situ_dynamics(
+                initial_conditions_file=BH_INITIAL_CONDITIONS_FILE,
+                timestep_file=TIMESTEP_FILE,
+                potential_file=IN_SITU_ORBIT_POTENTIAL_FILE,
+                density_potential_file=MWPOTS_PATH,
+                output_file=BH_IN_SITU_DYNAMICS_OUTPUT_FILE,
+                plot_file=BH_IN_SITU_DYNAMICS_PLOT_FILE,
+                start_snapshot_index=SNAPSHOT_INDEX,
+                end_snapshot_index=END_SNAPSHOT_INDEX,
+                integration_method=INTEGRATION_METHOD,
+                potential_mode=POTENTIAL_MODE,
+                df_model=DF_MODEL,
+                static_potential_index=STATIC_POTENTIAL_INDEX,
+                gc_mass=BH_MASS,
+                gc_half_mass_radius=0.0,
+                m22=M22,
+                df_cache_directory=BH_IN_SITU_DF_CACHE_DIRECTORY,
+                reuse_df_cache=REUSE_DF_CACHE,
+                mass_loss_mode="none",
+                central_capture_radius=BH_CENTRAL_CAPTURE_RADIUS,
+                generate_gc_moving_potentials=False,
+                gc_potential_scale_radius=0.0,
+                object_type="BH",
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_IN_SITU_BH_DYNAMICS",
+                start_time=stage_start,
+                n_gcs=in_situ_bh_dynamics_results["number_of_objects"],
+                n_particles=None,
+                n_cpus=N_CPUS,
+            )
+
+        # ==========================================================
+        # Run the ex-situ black-hole dynamics
+        # ==========================================================
+
+        if RUN_EX_SITU_BH_DYNAMICS:
+            stage_start = start_stage_timer()
+
+            ex_situ_bh_dynamics_results = run_ex_situ_dynamics(
+                galaxy_id=galaxy_id,
+                satellites_file=EX_SITU_BH_RETAINED_SATELLITES_FILE,
+                initial_conditions_directory=BH_EX_SITU_OUTPUT_DIRECTORY,
+                satellite_trajectory_file=EX_SITU_SATELLITE_TRAJECTORY_FILE,
+                satellite_potential_directory=(
+                    EX_SITU_SATELLITE_POTENTIAL_DIRECTORY
+                ),
+                timestep_file=TIMESTEP_FILE,
+                host_orbit_potential_file=IN_SITU_ORBIT_POTENTIAL_FILE,
+                host_density_potential_file=MWPOTS_PATH,
+                output_file=BH_EX_SITU_DYNAMICS_OUTPUT_FILE,
+                plot_file=BH_EX_SITU_DYNAMICS_PLOT_FILE,
+                start_snapshot_index=SNAPSHOT_INDEX,
+                end_snapshot_index=END_SNAPSHOT_INDEX,
+                integration_method=INTEGRATION_METHOD,
+                potential_mode=POTENTIAL_MODE,
+                static_potential_index=STATIC_POTENTIAL_INDEX,
+                df_model=DF_MODEL,
+                gc_mass=BH_MASS,
+                gc_half_mass_radius=0.0,
+                m22=M22,
+                mass_loss_mode="none",
+                central_capture_radius=BH_CENTRAL_CAPTURE_RADIUS,
+                release_energy_tolerance=RELEASE_ENERGY_TOLERANCE,
+                generate_gc_moving_potentials=False,
+                gc_potential_scale_radius=0.0,
+                object_type="BH",
+                initial_conditions_filename_template=(
+                    "IniG{galaxy_id}Sat{satellite_id}BH.txt"
+                ),
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_EX_SITU_BH_DYNAMICS",
+                start_time=stage_start,
+                n_gcs=ex_situ_bh_dynamics_results["number_of_objects"],
                 n_particles=None,
                 n_cpus=1,
             )
@@ -829,6 +1359,9 @@ def run_pipeline(configuration):
                     END_SNAPSHOT_INDEX
                 ),
                 potential_mode=POTENTIAL_MODE,
+                static_potential_index=(
+                    STATIC_POTENTIAL_INDEX
+                ),
                 df_model=DF_MODEL,
                 mass_loss_mode=MASS_LOSS_MODE,
                 integration_method=(
@@ -846,6 +1379,45 @@ def run_pipeline(configuration):
                 n_gcs=number_of_gcs,
                 n_particles=N_STREAM_PARTICLES,
                 n_cpus=N_CPUS,
+            )
+
+        # ==========================================================
+        # Run the in-situ NSC stream
+        # ==========================================================
+
+        if RUN_IN_SITU_NSC_STREAMS:
+            stage_start = start_stage_timer()
+
+            nsc_stream_files = run_in_situ_streams(
+                plummer_file=NSC_PLUMMER_FILE,
+                timestep_file=TIMESTEP_FILE,
+                potential_file=MWPOTS_PATH,
+                dynamics_file=NSC_DYNAMICS_OUTPUT_FILE,
+                gc_moving_potential_directory=(
+                    NSC_MOVING_POTENTIAL_DIRECTORY
+                ),
+                output_directory=NSC_STREAM_OUTPUT_DIRECTORY,
+                plot_directory=NSC_STREAM_PLOT_DIRECTORY,
+                start_snapshot_index=SNAPSHOT_INDEX,
+                end_snapshot_index=END_SNAPSHOT_INDEX,
+                potential_mode=POTENTIAL_MODE,
+                static_potential_index=STATIC_POTENTIAL_INDEX,
+                df_model=DF_MODEL,
+                mass_loss_mode=MASS_LOSS_MODE,
+                integration_method=INTEGRATION_METHOD,
+                n_jobs=STREAM_N_JOBS,
+                batch_size=STREAM_BATCH_SIZE,
+                object_type="NSC",
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_IN_SITU_NSC_STREAMS",
+                start_time=stage_start,
+                n_gcs=len(nsc_stream_files),
+                n_particles=N_STREAM_PARTICLES,
+                n_cpus=_stream_cpu_count(),
             )
 
         # ==========================================================
@@ -903,6 +1475,48 @@ def run_pipeline(configuration):
                 stage="RUN_EX_SITU_STREAMS",
                 start_time=stage_start,
                 n_gcs=len(ex_situ_stream_files),
+                n_particles=N_STREAM_PARTICLES,
+                n_cpus=_stream_cpu_count(),
+            )
+
+        # ==========================================================
+        # Run the ex-situ NSC streams
+        # ==========================================================
+
+        if RUN_EX_SITU_NSC_STREAMS:
+            stage_start = start_stage_timer()
+
+            ex_situ_nsc_stream_files = run_ex_situ_streams(
+                galaxy_id=galaxy_id,
+                plummer_file=NSC_PLUMMER_FILE,
+                timestep_file=TIMESTEP_FILE,
+                host_potential_file=MWPOTS_PATH,
+                dynamics_file=EX_SITU_NSC_DYNAMICS_OUTPUT_FILE,
+                gc_moving_potential_directory=(
+                    EX_SITU_NSC_MOVING_POTENTIAL_DIRECTORY
+                ),
+                output_directory=(
+                    EX_SITU_NSC_STREAM_OUTPUT_DIRECTORY
+                ),
+                plot_directory=(
+                    EX_SITU_NSC_STREAM_PLOT_DIRECTORY
+                ),
+                potential_mode=POTENTIAL_MODE,
+                static_potential_index=STATIC_POTENTIAL_INDEX,
+                df_model=DF_MODEL,
+                mass_loss_mode=MASS_LOSS_MODE,
+                integration_method=INTEGRATION_METHOD,
+                n_jobs=STREAM_N_JOBS,
+                batch_size=STREAM_BATCH_SIZE,
+                object_type="NSC",
+            )
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_EX_SITU_NSC_STREAMS",
+                start_time=stage_start,
+                n_gcs=len(ex_situ_nsc_stream_files),
                 n_particles=N_STREAM_PARTICLES,
                 n_cpus=_stream_cpu_count(),
             )
@@ -967,6 +1581,25 @@ def run_pipeline(configuration):
         ),
         "random_seed_in_situ": RANDOM_SEED,
         "keep_agama_file": KEEP_AGAMA_FILE,
+
+        # In-situ nuclear star cluster
+        "enable_nscs": ENABLE_NSCS,
+        "enable_nsc_streams": ENABLE_NSC_STREAMS,
+        "nsc_initial_radius": NSC_INITIAL_RADIUS,
+        "nsc_mass": NSC_MASS,
+        "nsc_half_mass_radius": NSC_HALF_MASS_RADIUS,
+        "nsc_central_capture_radius": NSC_CENTRAL_CAPTURE_RADIUS,
+        "generate_nsc_moving_potentials": (
+            GENERATE_NSC_MOVING_POTENTIALS
+        ),
+
+        # Black holes
+        "enable_bhs": ENABLE_BHS,
+        "bh_initial_radius": BH_INITIAL_RADIUS,
+        "bh_mass": BH_MASS,
+        "bh_central_capture_radius": (
+            BH_CENTRAL_CAPTURE_RADIUS
+        ),
 
         # Ex-situ initial conditions
         "ngc_ex_situ": NGC_EX_SITU,
@@ -1049,6 +1682,14 @@ def run_pipeline(configuration):
 
     ENABLED_STAGES = {
         "RUN_IN_SITU_ICS": RUN_ICS,
+        "RUN_IN_SITU_NSC_ICS": RUN_IN_SITU_NSC_ICS,
+        "RUN_EX_SITU_NSC_ICS": RUN_EX_SITU_NSC_ICS,
+        "RUN_IN_SITU_NSC_DYNAMICS": RUN_IN_SITU_NSC_DYNAMICS,
+        "RUN_EX_SITU_NSC_DYNAMICS": RUN_EX_SITU_NSC_DYNAMICS,
+        "RUN_IN_SITU_BH_ICS": RUN_IN_SITU_BH_ICS,
+        "RUN_EX_SITU_BH_ICS": RUN_EX_SITU_BH_ICS,
+        "RUN_IN_SITU_BH_DYNAMICS": RUN_IN_SITU_BH_DYNAMICS,
+        "RUN_EX_SITU_BH_DYNAMICS": RUN_EX_SITU_BH_DYNAMICS,
         "RUN_EX_SITU_ICS": RUN_EX_SITU_ICS,
         "RUN_EX_SITU_SATELLITES": (
             RUN_EX_SITU_SATELLITES
@@ -1065,6 +1706,13 @@ def run_pipeline(configuration):
         ),
         "RUN_EX_SITU_STREAMS": (
             RUN_EX_SITU_STREAMS
+        ),
+        "RUN_NSC_STREAM_ICS": RUN_NSC_STREAM_ICS,
+        "RUN_IN_SITU_NSC_STREAMS": (
+            RUN_IN_SITU_NSC_STREAMS
+        ),
+        "RUN_EX_SITU_NSC_STREAMS": (
+            RUN_EX_SITU_NSC_STREAMS
         ),
     }
 

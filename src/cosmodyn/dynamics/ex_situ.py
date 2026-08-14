@@ -262,6 +262,7 @@ def _gc_moving_potential_entry(
             "active": False,
             "gc_potential": None,
             "moving_potential": None,
+            "gc_orbit": None,
             "start_index": int(start_index),
             "end_index": int(end_index),
             "frame": frame,
@@ -282,6 +283,7 @@ def _gc_moving_potential_entry(
         "active": True,
         "gc_potential": gc_potential,
         "moving_potential": moving_potential,
+        "gc_orbit": gc_orbit,
         "start_index": int(start_index),
         "end_index": int(end_index),
         "frame": frame,
@@ -343,6 +345,8 @@ def run_ex_situ_dynamics(
     generate_gc_moving_potentials=False,
     gc_moving_potential_directory=None,
     gc_potential_scale_radius=None,
+    object_type="GC",
+    initial_conditions_filename_template=None,
 ):
     """Integrate ex-situ GCs in the satellite frame, then in the host frame.
 
@@ -366,13 +370,30 @@ def run_ex_situ_dynamics(
     output_file = Path(output_file)
     plot_file = Path(plot_file) if plot_file is not None else None
 
+    object_type = str(object_type).strip().upper()
+    if object_type not in {"GC", "NSC", "BH"}:
+        raise ValueError("object_type must be 'GC', 'NSC', or 'BH'.")
+
+    # A BH is a point mass. It never loses mass and never needs a moving
+    # potential because no BH stream is generated.
+    if object_type == "BH":
+        gc_half_mass_radius = 0.0
+        mass_loss_mode = "none"
+        generate_gc_moving_potentials = False
+        gc_potential_scale_radius = 0.0
+    if initial_conditions_filename_template is None:
+        suffix = "GCs" if object_type == "GC" else object_type
+        initial_conditions_filename_template = (
+            f"IniG{{galaxy_id}}Sat{{satellite_id}}{suffix}.txt"
+        )
+
     if gc_potential_scale_radius is None:
         gc_potential_scale_radius = gc_half_mass_radius
     if gc_moving_potential_directory is None:
         gc_moving_potential_directory = output_file.parent / "GCPotential"
     else:
         gc_moving_potential_directory = Path(gc_moving_potential_directory)
-    if gc_potential_scale_radius <= 0.0:
+    if generate_gc_moving_potentials and gc_potential_scale_radius <= 0.0:
         raise ValueError("gc_potential_scale_radius must be positive.")
     if generate_gc_moving_potentials:
         gc_moving_potential_directory.mkdir(parents=True, exist_ok=True)
@@ -389,8 +410,13 @@ def run_ex_situ_dynamics(
         raise ValueError("df_model must be 'none', 'cdm', or 'fdm'.")
     if mass_loss_mode not in ("none", "postprocess", "coupled"):
         raise ValueError("mass_loss_mode must be 'none', 'postprocess', or 'coupled'.")
-    if min(gc_mass, gc_half_mass_radius, central_capture_radius) <= 0.0:
-        raise ValueError("GC mass, size, and capture radius must be positive.")
+    if central_capture_radius <= 0.0:
+        raise ValueError("central_capture_radius must be positive.")
+    if object_type == "BH":
+        if gc_half_mass_radius != 0.0:
+            raise ValueError("A BH must have gc_half_mass_radius=0.")
+    elif gc_mass <= 0.0 or gc_half_mass_radius <= 0.0:
+        raise ValueError("Object mass and size must be positive.")
     if df_model == "fdm" and m22 <= 0.0:
         raise ValueError("m22 must be positive for FDM friction.")
 
@@ -408,6 +434,7 @@ def run_ex_situ_dynamics(
     satellite_plot_tracks = {}
     total_clusters = 0
     gc_moving_potential_files = []
+    all_initial_object_masses = []
 
     # Building a galpy dynamical-friction force is expensive because its
     # velocity-dispersion information is initialized from the density
@@ -420,11 +447,17 @@ def run_ex_situ_dynamics(
         for satellite_id, listed_snapshots in satellites:
             ic_file = (
                 initial_conditions_directory
-                / f"IniG{galaxy_id}Sat{satellite_id}GCs.txt"
+                / initial_conditions_filename_template.format(
+                    galaxy_id=galaxy_id,
+                    satellite_id=satellite_id,
+                )
             )
             group_name = f"Sat_{satellite_id}"
             if not ic_file.exists():
-                print(f"No GC initial conditions for satellite {satellite_id}; skipping.")
+                print(
+                    f"No {object_type} initial conditions for satellite "
+                    f"{satellite_id}; skipping."
+                )
                 continue
             if group_name not in trajectory_h5:
                 print(f"No prepared trajectory for satellite {satellite_id}; skipping.")
@@ -449,6 +482,26 @@ def run_ex_situ_dynamics(
 
             initial_conditions = np.atleast_2d(np.loadtxt(ic_file))
             number_of_clusters = len(initial_conditions)
+            if object_type == "BH":
+                if initial_conditions.shape[1] < 7:
+                    raise ValueError(
+                        f"BH initial conditions must contain a seventh "
+                        f"mass column: {ic_file}"
+                    )
+                initial_masses = np.asarray(
+                    initial_conditions[:, 6], dtype=float
+                )
+            else:
+                initial_masses = np.full(
+                    number_of_clusters, gc_mass, dtype=float
+                )
+            if np.any(~np.isfinite(initial_masses)) or np.any(
+                initial_masses <= 0.0
+            ):
+                raise ValueError(
+                    f"{object_type} masses must be finite and positive."
+                )
+            all_initial_object_masses.extend(initial_masses.tolist())
             total_clusters += number_of_clusters
             satellite_group = trajectory_h5[group_name]
             satellite_plot_tracks[satellite_id] = {
@@ -480,7 +533,7 @@ def run_ex_situ_dynamics(
             captured = np.zeros(number_of_clusters, dtype=bool)
             release_time = np.full(number_of_clusters, np.nan)
             release_snapshot = np.full(number_of_clusters, -1, dtype=int)
-            current_mass = np.full(number_of_clusters, gc_mass, dtype=float)
+            current_mass = initial_masses.copy()
             storage = [_empty_storage() for _ in range(number_of_clusters)]
             moving_potential_histories = [
                 {} for _ in range(number_of_clusters)
@@ -489,8 +542,16 @@ def run_ex_situ_dynamics(
 
             print(
                 f"Integrating G{galaxy_id} satellite {satellite_id}: "
-                f"{number_of_clusters} GC(s), snapshots {first_snapshot}-{end_snapshot_index - 1}."
+                f"{number_of_clusters} {object_type}(s), snapshots "
+                f"{first_snapshot}-{end_snapshot_index - 1}."
             )
+            if object_type == "BH":
+                print(
+                    "BH mass(es) from initial conditions: "
+                    + ", ".join(
+                        f"{mass:.6e} Msun" for mass in initial_masses
+                    )
+                )
 
             for snapshot in range(first_snapshot, end_snapshot_index):
                 times_numeric = np.linspace(
@@ -523,7 +584,7 @@ def run_ex_situ_dynamics(
                     host_df_force_cache[snapshot] = _build_df_force(
                         df_model,
                         host_density,
-                        gc_mass,
+                        float(np.max(initial_masses)),
                         gc_half_mass_radius,
                         m22,
                     )
@@ -539,7 +600,7 @@ def run_ex_situ_dynamics(
                     satellite_df_force_cache[snapshot] = _build_df_force(
                         df_model,
                         internal_density,
-                        gc_mass,
+                        float(np.max(initial_masses)),
                         gc_half_mass_radius,
                         m22,
                     )
@@ -561,7 +622,7 @@ def run_ex_situ_dynamics(
                     mass_for_df = (
                         mass_at_start
                         if mass_loss_mode == "coupled"
-                        else gc_mass
+                        else initial_masses[cluster_index]
                     )
                     interval_phase = None
                     tidal_parts = []
@@ -650,7 +711,7 @@ def run_ex_situ_dynamics(
                                 host_df_force_cache[snapshot] = _build_df_force(
                                     df_model,
                                     host_density,
-                                    gc_mass,
+                                    initial_masses[cluster_index],
                                     gc_half_mass_radius,
                                     m22,
                                 )
@@ -859,6 +920,7 @@ def run_ex_situ_dynamics(
 
             output[satellite_id] = {
                 "storage": storage,
+                "initial_masses": initial_masses,
                 "released": released,
                 "captured": captured,
                 "release_time": release_time,
@@ -888,10 +950,21 @@ def run_ex_situ_dynamics(
         h5.attrs["potential_mode"] = potential_mode
         h5.attrs["df_model"] = df_model
         h5.attrs["mass_loss_mode"] = mass_loss_mode
+        h5.attrs["object_type"] = object_type
+        h5.attrs["initial_object_mass_msun"] = (
+            np.asarray(all_initial_object_masses, dtype=float)
+            if object_type == "BH"
+            else gc_mass
+        )
+        h5.attrs["object_half_mass_radius_kpc"] = gc_half_mass_radius
         h5.attrs["host_orbit_potential_file"] = str(host_orbit_potential_file)
         h5.attrs["host_density_potential_file"] = str(host_density_potential_file)
         h5.attrs["release_energy_tolerance"] = release_energy_tolerance
-        h5.attrs["initial_gc_mass_msun"] = gc_mass
+        h5.attrs["initial_gc_mass_msun"] = (
+            np.asarray(all_initial_object_masses, dtype=float)
+            if object_type == "BH"
+            else gc_mass
+        )
         h5.attrs["gc_half_mass_radius_kpc"] = gc_half_mass_radius
         h5.attrs["generate_gc_moving_potentials"] = (
             generate_gc_moving_potentials
@@ -911,8 +984,13 @@ def run_ex_situ_dynamics(
             satellite_group.create_dataset("Captured", data=result["captured"].astype(np.uint8))
             satellite_group.create_dataset("ReleaseTime", data=result["release_time"])
             satellite_group.create_dataset("ReleaseSnapshot", data=result["release_snapshot"])
+            satellite_group.create_dataset(
+                "InitialMass", data=result["initial_masses"]
+            )
             for cluster_index, storage in enumerate(result["storage"]):
-                gc_group = satellite_group.create_group(f"GC_{cluster_index}")
+                gc_group = satellite_group.create_group(
+                    f"{object_type}_{cluster_index}"
+                )
                 for key, values in storage.items():
                     data = np.concatenate(values) if values else np.array([])
                     gc_group.create_dataset(key, data=data)
@@ -938,7 +1016,11 @@ def run_ex_situ_dynamics(
                     color="black",
                     linewidth=0.55,
                     alpha=0.7,
-                    label=("Ex-situ GCs" if not gc_label_added else None),
+                    label=(
+                        f"Ex-situ {object_type}s"
+                        if not gc_label_added
+                        else None
+                    ),
                 )
                 gc_label_added = True
 
@@ -983,5 +1065,10 @@ def run_ex_situ_dynamics(
         "output_file": output_file,
         "plot_file": plot_file,
         "number_of_clusters": total_clusters,
+        "number_of_objects": total_clusters,
+        "object_type": object_type,
+        "initial_object_masses": np.asarray(
+            all_initial_object_masses, dtype=float
+        ),
         "gc_moving_potential_files": gc_moving_potential_files,
     }

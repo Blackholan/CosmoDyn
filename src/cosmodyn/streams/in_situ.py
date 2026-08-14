@@ -248,14 +248,20 @@ def run_in_situ_streams(
     start_snapshot_index=8,
     end_snapshot_index=None,
     potential_mode="evolving",
+    static_potential_index=73,
     df_model="none",
     mass_loss_mode="none",
     integration_method="dop853_c",
     n_jobs=-1,
     batch_size=64,
+    object_type="GC",
 ):
-    """Generate and evolve one tidal stream for every in-situ GC."""
+    """Generate and evolve one tidal stream for every in-situ object."""
     start_clock = time.time()
+
+    object_type = str(object_type).strip().upper()
+    if object_type not in {"GC", "NSC"}:
+        raise ValueError("object_type must be 'GC' or 'NSC'.")
 
     plummer_file = Path(plummer_file)
     timestep_file = Path(timestep_file)
@@ -326,7 +332,10 @@ def run_in_situ_streams(
 
     for cluster_index in range(number_of_clusters):
         print("\n" + "=" * 70)
-        print(f"Generating stream for GC {cluster_index}/{number_of_clusters - 1}")
+        print(
+            f"Generating stream for {object_type} "
+            f"{cluster_index}/{number_of_clusters - 1}"
+        )
         print("=" * 70)
 
         moving_potential_file = _moving_potential_filename(
@@ -338,7 +347,8 @@ def run_in_situ_streams(
         )
         if not moving_potential_file.exists():
             raise FileNotFoundError(
-                f"GC moving-potential file not found: {moving_potential_file}"
+                f"{object_type} moving-potential file not found: "
+                f"{moving_potential_file}"
             )
 
         with moving_potential_file.open("rb") as stream:
@@ -362,8 +372,13 @@ def run_in_situ_streams(
             )
             times = times_numeric * units.Gyr
 
-            # Snapshot-indexed potentials, as in the evolving TNG50 model.
-            if isinstance(host_potentials, dict):
+            if potential_mode == "static":
+                host_potential = (
+                    host_potentials[static_potential_index]
+                    if isinstance(host_potentials, dict)
+                    else host_potentials
+                )
+            elif isinstance(host_potentials, dict):
                 host_potential = host_potentials[snapshot_index]
             else:
                 host_potential = host_potentials
@@ -384,7 +399,7 @@ def run_in_situ_streams(
 
             if not entry["active"]:
                 print(
-                    "GC moving potential inactive "
+                    f"{object_type} moving potential inactive "
                     f"({entry['inactive_reason']}). Releasing all remaining "
                     "bound particles into the host potential."
                 )
@@ -481,7 +496,9 @@ def run_in_situ_streams(
                 "and were translated to the galactocentric frame for output."
             )
 
-        output_file = output_directory / f"InSituStream_GC{cluster_index}.h5"
+        output_file = output_directory / (
+            f"InSituStream_{object_type}{cluster_index}.h5"
+        )
         with h5py.File(output_file, "w") as h5:
             group = h5.create_group("StreamData")
             group.create_dataset("PosX", data=final_x)
@@ -492,13 +509,19 @@ def run_in_situ_streams(
             group.create_dataset("vz", data=final_vz)
 
             h5.attrs["gc_index"] = cluster_index
+            h5.attrs["object_index"] = cluster_index
+            h5.attrs["object_type"] = object_type
             h5.attrs["potential_mode"] = potential_mode
             h5.attrs["df_model"] = df_model
             h5.attrs["mass_loss_mode"] = mass_loss_mode
             h5.attrs["start_snapshot_index"] = start_snapshot_index
             h5.attrs["end_snapshot_index"] = end_snapshot_index
             h5.attrs["final_gc_mass_msun"] = float(gc_mass_all[cluster_index, -1])
+            h5.attrs["final_object_mass_msun"] = float(
+                gc_mass_all[cluster_index, -1]
+            )
             h5.attrs["gc_captured"] = bool(captured[cluster_index])
+            h5.attrs["object_captured"] = bool(captured[cluster_index])
 
         output_files.append(output_file)
         print(f"Final stream saved to: {output_file}")
@@ -521,14 +544,20 @@ def run_in_situ_streams(
                 gc_y_final,
                 s=15,
                 marker="*",
-                label="GC final position",
+                label=f"{object_type} final position",
             )
             plt.xlabel("X [kpc]")
             plt.ylabel("Y [kpc]")
             plt.legend(loc="best")
             plt.tight_layout()
-            plt.savefig(plot_directory / f"InSituStream_GC{cluster_index}.png", dpi=200)
+            plt.savefig(
+                plot_directory / f"InSituStream_{object_type}{cluster_index}.png",
+                dpi=200,
+            )
             plt.close()
 
-    print(f"All in-situ streams completed in {time.time() - start_clock:.2f} s.")
+    print(
+        f"All in-situ {object_type} streams completed in "
+        f"{time.time() - start_clock:.2f} s."
+    )
     return output_files

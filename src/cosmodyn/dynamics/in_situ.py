@@ -322,6 +322,7 @@ def run_in_situ_dynamics(
     generate_gc_moving_potentials=False,
     gc_moving_potential_directory=None,
     gc_potential_scale_radius=None,
+    object_type="GC",
 ):
     """
     Integrate in-situ GC orbits.
@@ -363,6 +364,17 @@ def run_in_situ_dynamics(
     else:
         density_potential_file = Path(density_potential_file)
     output_file = Path(output_file)
+    object_type = str(object_type).strip().upper()
+    if object_type not in {"GC", "NSC", "BH"}:
+        raise ValueError("object_type must be 'GC', 'NSC', or 'BH'.")
+
+    # Black holes are point masses: these properties are fixed internally
+    # and cannot be overridden by launcher parameters.
+    if object_type == "BH":
+        gc_half_mass_radius = 0.0
+        mass_loss_mode = "none"
+        generate_gc_moving_potentials = False
+        gc_potential_scale_radius = 0.0
 
     if df_cache_directory is None:
         df_cache_directory = output_file.parent / "DynamicalFriction"
@@ -372,7 +384,7 @@ def run_in_situ_dynamics(
     if gc_potential_scale_radius is None:
         gc_potential_scale_radius = gc_half_mass_radius
 
-    if gc_potential_scale_radius <= 0:
+    if generate_gc_moving_potentials and gc_potential_scale_radius <= 0:
         raise ValueError(
             "gc_potential_scale_radius must be strictly positive."
         )
@@ -413,9 +425,10 @@ def run_in_situ_dynamics(
         raise ValueError(
             "central_capture_radius must be strictly positive."
         )
-    if gc_mass <= 0:
-        raise ValueError("gc_mass must be strictly positive.")
-    if gc_half_mass_radius <= 0:
+    if object_type == "BH":
+        if gc_half_mass_radius != 0.0:
+            raise ValueError("A BH must have gc_half_mass_radius=0.")
+    elif gc_half_mass_radius <= 0:
         raise ValueError("gc_half_mass_radius must be strictly positive.")
     if df_model == "fdm" and m22 <= 0:
         raise ValueError("m22 must be strictly positive.")
@@ -427,6 +440,24 @@ def run_in_situ_dynamics(
 
     initial_conditions = np.atleast_2d(np.loadtxt(initial_conditions_file))
     number_of_clusters = len(initial_conditions)
+
+    if object_type == "BH":
+        if initial_conditions.shape[1] < 7:
+            raise ValueError(
+                "BH initial conditions must contain a seventh mass column."
+            )
+        if number_of_clusters != 1:
+            raise ValueError("Exactly one in-situ BH is expected.")
+        gc_mass = float(initial_conditions[0, 6])
+
+    if not np.isfinite(gc_mass) or gc_mass <= 0.0:
+        raise ValueError(f"{object_type} mass must be finite and positive.")
+
+    if object_type == "BH":
+        print(
+            f"Using in-situ BH mass from initial conditions: "
+            f"{gc_mass:.6e} Msun."
+        )
 
     current_phase_space = [
         [
@@ -1110,6 +1141,9 @@ def run_in_situ_dynamics(
         )
         h5.attrs["df_model"] = df_model
         h5.attrs["mass_loss_mode"] = mass_loss_mode
+        h5.attrs["object_type"] = object_type
+        h5.attrs["initial_object_mass_msun"] = gc_mass
+        h5.attrs["object_half_mass_radius_kpc"] = gc_half_mass_radius
         h5.attrs["initial_gc_mass_msun"] = gc_mass
         h5.attrs["central_capture_radius_kpc"] = central_capture_radius
         h5.attrs["gc_half_mass_radius_kpc"] = gc_half_mass_radius
@@ -1165,4 +1199,6 @@ def run_in_situ_dynamics(
         "df_cache_file": str(df_cache_file) if df_cache_file else None,
         "gc_moving_potential_files": gc_moving_potential_files,
         "gc_potential_scale_radius": gc_potential_scale_radius,
+        "object_type": object_type,
+        "number_of_objects": number_of_clusters,
     }
