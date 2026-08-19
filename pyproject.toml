@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cosmodyn"
-version = "0.1.0"
+version = "1.2"
 description = "A semi-analytic framework for the dynamical evolution of compact stellar systems in cosmological simulations."
 readme = "README.md"
 requires-python = ">=3.10"
