@@ -10,9 +10,6 @@ from cosmodyn.pipeline import run_pipeline
 # ==========================================================
 
 GALAXY_IDS = [1]
-# GALAXY_IDS = [613192, 462710]
-# GALAXY_IDS = np.loadtxt("GalaxyList.txt", dtype=int).tolist()
-
 CONTINUE_ON_ERROR = True
 
 # "in_situ": in-situ GCs only
@@ -22,8 +19,8 @@ CONTINUE_ON_ERROR = True
 RUN_MODE = "in_situ"
 
 # Generate and integrate streams for the populations selected by RUN_MODE.
-ENABLE_STREAMS = True
-
+ENABLE_STREAMS = False
+ENABLE_NSC_STREAMS = False
 
 # ==========================================================
 # 2. INITIAL CONDITIONS
@@ -31,7 +28,7 @@ ENABLE_STREAMS = True
 
 SNAPSHOT_INDEX = 0
 NGC = 3                  # 0 = use the halo-mass relation
-ALPHA = 3                # used only when NGC = 0
+ALPHA = 1                # used only when NGC = 0
 CIRCULARITY_THRESHOLD = None # None
 TAGGING_RADIUS_FACTOR = 2 
 MINIMUM_TAGGING_RADIUS = 0.4  # kpc; None disables the constraint
@@ -41,6 +38,26 @@ N_PARTICLES_PER_COMPONENT = 100_000
 RANDOM_SEED = None       # for example 42 for reproducible sampling
 KEEP_AGAMA_FILE = True
 
+# ==========================================================
+# NUCLEAR STAR CLUSTERS
+# ==========================================================
+
+ENABLE_NSCS = False
+
+NSC_INITIAL_RADIUS = 0.2          # kpc = 1 pc
+NSC_MASS = 5e7                      # Msun
+NSC_HALF_MASS_RADIUS = 0.01        # kpc = 5 pc
+NSC_CENTRAL_CAPTURE_RADIUS = 0.0001 # kpc = 0.1 pc
+GENERATE_NSC_MOVING_POTENTIALS = False
+
+# ==========================================================
+# BLACK HOLES
+# ==========================================================
+ENABLE_BHS = False
+
+BH_MASS = 0
+BH_INITIAL_RADIUS = 0.001       # kpc = 1 pc
+BH_CENTRAL_CAPTURE_RADIUS = 0.001
 
 # ==========================================================
 # 3. DYNAMICS — SHARED BY IN-SITU AND EX-SITU GCs
@@ -94,14 +111,34 @@ STREAM_BATCH_SIZE = 64
 # 6. CUSTOM STAGES — USED ONLY WITH RUN_MODE = "custom"
 # ==========================================================
 
+#Globular clusters
 RUN_ICS = False
 RUN_EX_SITU_ICS = False
-RUN_EX_SITU_SATELLITES = False
+RUN_EX_SITU_SATELLITES = True
+
 RUN_IN_SITU_DYNAMICS = False
 RUN_EX_SITU_DYNAMICS = False
+
 RUN_STREAM_ICS = False
 RUN_IN_SITU_STREAMS = False
 RUN_EX_SITU_STREAMS = False
+
+#Nuclear star clusters
+RUN_IN_SITU_NSC_ICS = False
+RUN_EX_SITU_NSC_ICS = False
+
+RUN_IN_SITU_NSC_DYNAMICS = False
+RUN_EX_SITU_NSC_DYNAMICS = False
+
+RUN_NSC_STREAM_ICS = False
+RUN_IN_SITU_NSC_STREAMS = False
+RUN_EX_SITU_NSC_STREAMS = False
+
+#Black holes
+RUN_IN_SITU_BH_ICS = True
+RUN_EX_SITU_BH_ICS = True
+RUN_IN_SITU_BH_DYNAMICS = True
+RUN_EX_SITU_BH_DYNAMICS = True
 
 
 if __name__ == "__main__":

@@ -134,8 +134,8 @@ def build_potential():
         fmt="%.8e",
     )
 
-    #return [dark_matter_potential, stellar_potential]
-    return dark_matter_potential #if only one component
+    return [dark_matter_potential, stellar_potential]
+    #return dark_matter_potential #if only one component
 
 
 def save_potential(potential, output_file):
