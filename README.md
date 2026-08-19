@@ -173,18 +173,6 @@ the standard launcher.
 
 ---
 
-## Planned features
-
-- ⏳ Initial conditions and dynamical evolution of massive black holes
-- ⏳ Initial conditions and dynamical evolution of nuclear star clusters
-- ⏳ Axisymmetric and triaxial host-galaxy potentials
-- ⏳ Anisotropic dynamical-friction prescriptions
-- ⏳ Additional dark-matter models
-- ⏳ More flexible input interfaces for other cosmological simulations
-- ⏳ Expanded validation tests and example datasets
-
----
-
 ## Contributing
 
 Contributions are welcome.
