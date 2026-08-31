@@ -31,9 +31,15 @@ def vcirc_fixed(r, pot):
         np.asarray(r) * units.kpc)
 
 
-def number_of_globular_clusters(m_vir):
-    return 10 ** (-9.58 + 0.99 * np.log10(m_vir))
+#def number_of_globular_clusters(m_vir):
+    #return 10 ** (-9.58 + 0.99 * np.log10(m_vir))
 
+
+def number_of_globular_clusters(m_vir):
+    intercept = np.random.normal(-9.58, 1.58)
+    slope = np.random.normal(0.99, 0.13)
+
+    return 10 ** (intercept + slope * np.log10(m_vir))
 
 
 def _agama_config_file():

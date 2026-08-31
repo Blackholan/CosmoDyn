@@ -69,11 +69,19 @@ INCLUDE_MOVING_SATELLITES = True # include the gravitational field of moving sat
 
 DF_MODEL = "cdm"             # "none", "cdm", "binney", "fdm"
 M22 = 1                       # used only with DF_MODEL = "fdm"
+REUSE_DF_CACHE = True
 
 GC_MASS = 1e6                  # Msun
 GC_HALF_MASS_RADIUS = 0.01     # kpc
 CENTRAL_CAPTURE_RADIUS = 0.001  # kpc
 MASS_LOSS_MODE = "coupled" # "none", "postprocess" or "coupled"
+
+# Parameters of the Kruijssen mass-loss prescription
+MASS_LOSS_GAMMA = 0.7
+TIDAL_STRENGTH_REFERENCE = 7.01e2
+DISSOLUTION_TIME_NORMALIZATION = 0.0107
+
+GENERATE_GC_MOVING_POTENTIALS = True
 
 # ==========================================================
 # 4. OPTIONAL EX-SITU OVERRIDES

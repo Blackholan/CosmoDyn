@@ -224,6 +224,12 @@ def run_pipeline(configuration):
     for name, value in parameters.items():
         globals()[name] = value
 
+    if not np.isfinite(NSC_MASS) or NSC_MASS < 0.0:
+        raise ValueError(
+            "NSC_MASS must be finite and non-negative: use 0 to infer "
+            "individual NSC masses or a positive value for a fixed mass."
+        )
+
     global N_CPUS
     N_CPUS = os.cpu_count() or 1
 
@@ -240,15 +246,6 @@ def run_pipeline(configuration):
         / (
             f"GCPlummer_M{GC_MASS:.0e}"
             f"_R{GC_HALF_MASS_RADIUS}"
-            f"_N{N_STREAM_PARTICLES:.0e}.h5"
-        )
-    )
-
-    NSC_PLUMMER_FILE = (
-        GLOBAL_OUTPUT_DIR
-        / (
-            f"NSCPlummer_M{NSC_MASS:.0e}"
-            f"_R{NSC_HALF_MASS_RADIUS}"
             f"_N{N_STREAM_PARTICLES:.0e}.h5"
         )
     )
@@ -299,6 +296,51 @@ def run_pipeline(configuration):
 
         return len(data)
 
+    def _read_compact_object_masses(initial_conditions_file):
+        """Read the seventh, mass, column of an NSC or BH IC file."""
+        initial_conditions_file = Path(initial_conditions_file)
+        if not initial_conditions_file.exists():
+            raise FileNotFoundError(
+                f"Initial-condition file not found: {initial_conditions_file}"
+            )
+        data = np.atleast_2d(np.loadtxt(initial_conditions_file))
+        if data.shape[1] < 7:
+            raise ValueError(
+                f"NSC initial conditions must contain a seventh mass "
+                f"column: {initial_conditions_file}"
+            )
+        masses = np.asarray(data[:, 6], dtype=float)
+        if np.any(~np.isfinite(masses)) or np.any(masses <= 0.0):
+            raise ValueError("NSC masses must be finite and positive.")
+        return masses
+
+    def _nsc_plummer_path(directory, label, mass):
+        """Return the mass-specific Plummer file for one NSC."""
+        return Path(directory) / "Plummer" / (
+            f"NSCPlummer_{label}_M{float(mass):.8e}"
+            f"_R{NSC_HALF_MASS_RADIUS}"
+            f"_N{N_STREAM_PARTICLES:.0e}.h5"
+        )
+
+    def _prepare_nsc_plummer_file(path, mass):
+        """Generate one NSC-specific Plummer model when requested."""
+        path = Path(path)
+        if RUN_NSC_STREAM_ICS:
+            generate_plummer_gc(
+                output_file=path,
+                gc_mass=float(mass),
+                gc_half_mass_radius=NSC_HALF_MASS_RADIUS,
+                n_particles=N_STREAM_PARTICLES,
+                n_iter=N_STREAM_ITER,
+                overwrite=OVERWRITE_STREAM_ICS,
+            )
+        elif not path.exists():
+            raise FileNotFoundError(
+                f"NSC Plummer file not found: {path}. Set "
+                "RUN_NSC_STREAM_ICS=True to generate it."
+            )
+        return path
+
     # ==========================================================
     # Generate the global stream initial conditions
     # ==========================================================
@@ -330,25 +372,9 @@ def run_pipeline(configuration):
         )
 
     if RUN_NSC_STREAM_ICS:
-        stage_start = start_stage_timer()
-
-        generate_plummer_gc(
-            output_file=NSC_PLUMMER_FILE,
-            gc_mass=NSC_MASS,
-            gc_half_mass_radius=NSC_HALF_MASS_RADIUS,
-            n_particles=N_STREAM_PARTICLES,
-            n_iter=N_STREAM_ITER,
-            overwrite=OVERWRITE_STREAM_ICS,
-        )
-
-        record_stage_timing(
-            records=TIMING_RECORDS,
-            galaxy_id=-1,
-            stage="RUN_NSC_STREAM_ICS",
-            start_time=stage_start,
-            n_gcs=1,
-            n_particles=N_STREAM_PARTICLES,
-            n_cpus=1,
+        print(
+            "NSC-specific Plummer models will be generated inside each "
+            "galaxy after the individual NSC masses are known."
         )
 
     def run_galaxy(galaxy_id):
@@ -679,6 +705,8 @@ def run_pipeline(configuration):
         number_of_gcs = _read_number_of_gcs(
             OUTPUT_FILE
         )
+        in_situ_nsc_plummer_file = None
+        ex_situ_nsc_plummer_files = {}
 
         # ==========================================================
         # Run the in-situ GC initial conditions
@@ -751,9 +779,11 @@ def run_pipeline(configuration):
 
             generate_in_situ_nsc(
                 mwpots_path=MWPOTS_PATH,
+                host_data_file=MWDATA_PATH,
                 output_file=NSC_INITIAL_CONDITIONS_FILE,
                 snapshot_index=SNAPSHOT_INDEX,
                 initial_radius=NSC_INITIAL_RADIUS,
+                object_mass=NSC_MASS,
             )
 
             record_stage_timing(
@@ -780,6 +810,7 @@ def run_pipeline(configuration):
                 output_directory=EX_SITU_NSC_OUTPUT_DIRECTORY,
                 snapshot_index=SNAPSHOT_INDEX,
                 initial_radius=NSC_INITIAL_RADIUS,
+                object_mass=NSC_MASS,
             )
 
             record_stage_timing(
@@ -789,6 +820,78 @@ def run_pipeline(configuration):
                 start_time=stage_start,
                 n_gcs=len(ex_situ_nsc_results["generated_files"]),
                 n_particles=None,
+                n_cpus=1,
+            )
+
+        # ==========================================================
+        # Generate one mass-specific Plummer model per NSC
+        # ==========================================================
+
+        if RUN_NSC_STREAM_ICS:
+            stage_start = start_stage_timer()
+            number_of_nsc_models = 0
+
+            if (
+                RUN_IN_SITU_NSC_STREAMS
+                and NSC_INITIAL_CONDITIONS_FILE.exists()
+            ):
+                in_situ_nsc_mass = _read_compact_object_masses(
+                    NSC_INITIAL_CONDITIONS_FILE
+                )[0]
+                in_situ_nsc_plummer_file = _nsc_plummer_path(
+                    NSC_OUTPUT_DIR,
+                    f"G{galaxy_id}_InSituNSC0",
+                    in_situ_nsc_mass,
+                )
+                _prepare_nsc_plummer_file(
+                    in_situ_nsc_plummer_file,
+                    in_situ_nsc_mass,
+                )
+                number_of_nsc_models += 1
+
+            if (
+                RUN_EX_SITU_NSC_STREAMS
+                and EX_SITU_NSC_RETAINED_SATELLITES_FILE.exists()
+            ):
+                with EX_SITU_NSC_RETAINED_SATELLITES_FILE.open(
+                    "r", encoding="utf-8"
+                ) as stream:
+                    for line in stream:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        satellite_id = int(
+                            stripped.split(":", maxsplit=1)[0]
+                        )
+                        ic_file = EX_SITU_NSC_OUTPUT_DIRECTORY / (
+                            f"IniG{galaxy_id}Sat{satellite_id}NSC.txt"
+                        )
+                        masses = _read_compact_object_masses(ic_file)
+                        for object_index, nsc_mass in enumerate(masses):
+                            plummer_path = _nsc_plummer_path(
+                                EX_SITU_NSC_OUTPUT_DIRECTORY,
+                                (
+                                    f"G{galaxy_id}_Sat{satellite_id}_"
+                                    f"NSC{object_index}"
+                                ),
+                                nsc_mass,
+                            )
+                            _prepare_nsc_plummer_file(
+                                plummer_path,
+                                nsc_mass,
+                            )
+                            ex_situ_nsc_plummer_files[
+                                (satellite_id, object_index)
+                            ] = plummer_path
+                            number_of_nsc_models += 1
+
+            record_stage_timing(
+                records=TIMING_RECORDS,
+                galaxy_id=galaxy_id,
+                stage="RUN_NSC_STREAM_ICS",
+                start_time=stage_start,
+                n_gcs=number_of_nsc_models,
+                n_particles=N_STREAM_PARTICLES,
                 n_cpus=1,
             )
 
@@ -1388,8 +1491,22 @@ def run_pipeline(configuration):
         if RUN_IN_SITU_NSC_STREAMS:
             stage_start = start_stage_timer()
 
+            if in_situ_nsc_plummer_file is None:
+                in_situ_nsc_mass = _read_compact_object_masses(
+                    NSC_INITIAL_CONDITIONS_FILE
+                )[0]
+                in_situ_nsc_plummer_file = _nsc_plummer_path(
+                    NSC_OUTPUT_DIR,
+                    f"G{galaxy_id}_InSituNSC0",
+                    in_situ_nsc_mass,
+                )
+                _prepare_nsc_plummer_file(
+                    in_situ_nsc_plummer_file,
+                    in_situ_nsc_mass,
+                )
+
             nsc_stream_files = run_in_situ_streams(
-                plummer_file=NSC_PLUMMER_FILE,
+                plummer_file=in_situ_nsc_plummer_file,
                 timestep_file=TIMESTEP_FILE,
                 potential_file=MWPOTS_PATH,
                 dynamics_file=NSC_DYNAMICS_OUTPUT_FILE,
@@ -1486,9 +1603,41 @@ def run_pipeline(configuration):
         if RUN_EX_SITU_NSC_STREAMS:
             stage_start = start_stage_timer()
 
+            if not ex_situ_nsc_plummer_files:
+                with EX_SITU_NSC_RETAINED_SATELLITES_FILE.open(
+                    "r", encoding="utf-8"
+                ) as stream:
+                    for line in stream:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        satellite_id = int(
+                            stripped.split(":", maxsplit=1)[0]
+                        )
+                        ic_file = EX_SITU_NSC_OUTPUT_DIRECTORY / (
+                            f"IniG{galaxy_id}Sat{satellite_id}NSC.txt"
+                        )
+                        masses = _read_compact_object_masses(ic_file)
+                        for object_index, nsc_mass in enumerate(masses):
+                            plummer_path = _nsc_plummer_path(
+                                EX_SITU_NSC_OUTPUT_DIRECTORY,
+                                (
+                                    f"G{galaxy_id}_Sat{satellite_id}_"
+                                    f"NSC{object_index}"
+                                ),
+                                nsc_mass,
+                            )
+                            _prepare_nsc_plummer_file(
+                                plummer_path,
+                                nsc_mass,
+                            )
+                            ex_situ_nsc_plummer_files[
+                                (satellite_id, object_index)
+                            ] = plummer_path
+
             ex_situ_nsc_stream_files = run_ex_situ_streams(
                 galaxy_id=galaxy_id,
-                plummer_file=NSC_PLUMMER_FILE,
+                plummer_file=ex_situ_nsc_plummer_files,
                 timestep_file=TIMESTEP_FILE,
                 host_potential_file=MWPOTS_PATH,
                 dynamics_file=EX_SITU_NSC_DYNAMICS_OUTPUT_FILE,

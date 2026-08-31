@@ -9,6 +9,8 @@ import numpy as np
 from astropy import units
 from galpy.potential import vcirc
 
+from .nsc_mass import resolve_nsc_mass
+
 
 HOST_STELLAR_MASS_COLUMN = 5
 
@@ -51,9 +53,16 @@ def generate_in_situ_nsc(
         )
 
     resolved_mass = None
+    if object_mass is None:
+        raise ValueError(f"object_mass is required for a {object_type}.")
+    if not np.isfinite(object_mass):
+        raise ValueError(
+            f"{object_type}_MASS must be finite."
+        )
+    if object_type == "NSC" and float(object_mass) < 0.0:
+        raise ValueError("NSC_MASS must be non-negative.")
+
     if object_type == "BH":
-        if object_mass is None:
-            raise ValueError("object_mass is required for a BH.")
         if object_mass > 0.0:
             resolved_mass = float(object_mass)
         else:
@@ -78,6 +87,27 @@ def generate_in_situ_nsc(
                     "The host stellar mass must be finite and positive."
                 )
             resolved_mass = 0.006 * stellar_mass
+    else:
+        if object_mass > 0.0:
+            resolved_mass = float(object_mass)
+        else:
+            if host_data_file is None:
+                raise ValueError(
+                    "host_data_file is required when NSC_MASS == 0."
+                )
+            host_data_file = Path(host_data_file)
+            if not host_data_file.exists():
+                raise FileNotFoundError(f"File not found: {host_data_file}")
+            host_data = np.atleast_2d(np.loadtxt(host_data_file))
+            if not 0 <= snapshot_index < len(host_data):
+                raise IndexError(
+                    f"Snapshot {snapshot_index} is absent from "
+                    f"{host_data_file}."
+                )
+            stellar_mass = float(
+                host_data[snapshot_index, HOST_STELLAR_MASS_COLUMN]
+            )
+            resolved_mass = resolve_nsc_mass(object_mass, stellar_mass)
 
     with mwpots_path.open("rb") as stream:
         potentials = pickle.load(stream)
@@ -120,10 +150,9 @@ def generate_in_situ_nsc(
         [[initial_radius, 0.0, circular_velocity, 0.0, 0.0, 0.0]],
         dtype=float,
     )
-    if object_type == "BH":
-        initial_conditions = np.column_stack(
-            (initial_conditions, [resolved_mass])
-        )
+    initial_conditions = np.column_stack(
+        (initial_conditions, [resolved_mass])
+    )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     np.savetxt(output_file, initial_conditions, fmt="%.16g")
@@ -134,8 +163,7 @@ def generate_in_situ_nsc(
         f"vcirc={circular_velocity:.6g} km/s."
     )
     print(f"{object_type} initial conditions saved to: {output_file}")
-    if object_type == "BH":
-        print(f"BH mass: {resolved_mass:.6e} Msun.")
+    print(f"{object_type} mass: {resolved_mass:.6e} Msun.")
 
     return initial_conditions
 

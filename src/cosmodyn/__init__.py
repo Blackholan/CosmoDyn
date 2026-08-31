@@ -15,6 +15,7 @@ from .initial_conditions.ex_situ_nsc import (
     generate_ex_situ_bhs,
     generate_ex_situ_nscs,
 )
+from .initial_conditions.nsc_mass import NSC_mass
 
 __version__ = "0.3.0"
 
@@ -31,4 +32,5 @@ __all__ = [
     "generate_ex_situ_nscs",
     "generate_in_situ_bh",
     "generate_ex_situ_bhs",
+    "NSC_mass",
 ]

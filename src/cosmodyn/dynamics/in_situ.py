@@ -441,21 +441,24 @@ def run_in_situ_dynamics(
     initial_conditions = np.atleast_2d(np.loadtxt(initial_conditions_file))
     number_of_clusters = len(initial_conditions)
 
-    if object_type == "BH":
+    if object_type in {"NSC", "BH"}:
         if initial_conditions.shape[1] < 7:
             raise ValueError(
-                "BH initial conditions must contain a seventh mass column."
+                f"{object_type} initial conditions must contain a seventh "
+                "mass column."
             )
         if number_of_clusters != 1:
-            raise ValueError("Exactly one in-situ BH is expected.")
+            raise ValueError(
+                f"Exactly one in-situ {object_type} is expected."
+            )
         gc_mass = float(initial_conditions[0, 6])
 
     if not np.isfinite(gc_mass) or gc_mass <= 0.0:
         raise ValueError(f"{object_type} mass must be finite and positive.")
 
-    if object_type == "BH":
+    if object_type in {"NSC", "BH"}:
         print(
-            f"Using in-situ BH mass from initial conditions: "
+            f"Using in-situ {object_type} mass from initial conditions: "
             f"{gc_mass:.6e} Msun."
         )
 

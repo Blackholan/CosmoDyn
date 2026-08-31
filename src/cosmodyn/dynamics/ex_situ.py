@@ -415,8 +415,10 @@ def run_ex_situ_dynamics(
     if object_type == "BH":
         if gc_half_mass_radius != 0.0:
             raise ValueError("A BH must have gc_half_mass_radius=0.")
-    elif gc_mass <= 0.0 or gc_half_mass_radius <= 0.0:
-        raise ValueError("Object mass and size must be positive.")
+    elif gc_half_mass_radius <= 0.0:
+        raise ValueError("Object size must be positive.")
+    elif object_type == "GC" and gc_mass <= 0.0:
+        raise ValueError("GC mass must be positive.")
     if df_model == "fdm" and m22 <= 0.0:
         raise ValueError("m22 must be positive for FDM friction.")
 
@@ -482,10 +484,10 @@ def run_ex_situ_dynamics(
 
             initial_conditions = np.atleast_2d(np.loadtxt(ic_file))
             number_of_clusters = len(initial_conditions)
-            if object_type == "BH":
+            if object_type in {"NSC", "BH"}:
                 if initial_conditions.shape[1] < 7:
                     raise ValueError(
-                        f"BH initial conditions must contain a seventh "
+                        f"{object_type} initial conditions must contain a seventh "
                         f"mass column: {ic_file}"
                     )
                 initial_masses = np.asarray(
@@ -545,9 +547,9 @@ def run_ex_situ_dynamics(
                 f"{number_of_clusters} {object_type}(s), snapshots "
                 f"{first_snapshot}-{end_snapshot_index - 1}."
             )
-            if object_type == "BH":
+            if object_type in {"NSC", "BH"}:
                 print(
-                    "BH mass(es) from initial conditions: "
+                    f"{object_type} mass(es) from initial conditions: "
                     + ", ".join(
                         f"{mass:.6e} Msun" for mass in initial_masses
                     )
@@ -953,7 +955,7 @@ def run_ex_situ_dynamics(
         h5.attrs["object_type"] = object_type
         h5.attrs["initial_object_mass_msun"] = (
             np.asarray(all_initial_object_masses, dtype=float)
-            if object_type == "BH"
+            if object_type in {"NSC", "BH"}
             else gc_mass
         )
         h5.attrs["object_half_mass_radius_kpc"] = gc_half_mass_radius
@@ -962,7 +964,7 @@ def run_ex_situ_dynamics(
         h5.attrs["release_energy_tolerance"] = release_energy_tolerance
         h5.attrs["initial_gc_mass_msun"] = (
             np.asarray(all_initial_object_masses, dtype=float)
-            if object_type == "BH"
+            if object_type in {"NSC", "BH"}
             else gc_mass
         )
         h5.attrs["gc_half_mass_radius_kpc"] = gc_half_mass_radius

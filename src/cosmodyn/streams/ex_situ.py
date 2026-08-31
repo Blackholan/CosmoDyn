@@ -264,19 +264,32 @@ def run_ex_situ_streams(
     object_type = str(object_type).strip().upper()
     if object_type not in {"GC", "NSC"}:
         raise ValueError("object_type must be 'GC' or 'NSC'.")
-    plummer_file = Path(plummer_file)
+    if isinstance(plummer_file, dict):
+        plummer_files = {
+            (int(key[0]), int(key[1])): Path(value)
+            for key, value in plummer_file.items()
+        }
+        shared_plummer_file = None
+    else:
+        plummer_files = None
+        shared_plummer_file = Path(plummer_file)
     timestep_file = Path(timestep_file)
     host_potential_file = Path(host_potential_file)
     dynamics_file = Path(dynamics_file)
     gc_moving_potential_directory = Path(gc_moving_potential_directory)
     output_directory = Path(output_directory)
 
-    for path in (
-        plummer_file,
+    required_paths = [
         timestep_file,
         host_potential_file,
         dynamics_file,
-    ):
+    ]
+    if shared_plummer_file is not None:
+        required_paths.append(shared_plummer_file)
+    else:
+        required_paths.extend(plummer_files.values())
+
+    for path in required_paths:
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
@@ -288,8 +301,11 @@ def run_ex_situ_streams(
     timestep = np.atleast_2d(np.loadtxt(timestep_file))
     with host_potential_file.open("rb") as stream:
         host_potentials = pickle.load(stream)
-    base_particles = _load_plummer_particles(plummer_file)
-    number_of_particles = len(base_particles)
+    base_particles = (
+        _load_plummer_particles(shared_plummer_file)
+        if shared_plummer_file is not None
+        else None
+    )
     output_files = []
 
     with h5py.File(dynamics_file, "r") as dynamics_h5:
@@ -312,6 +328,19 @@ def run_ex_situ_streams(
             for object_name in object_names:
                 cluster_index = int(object_name.split("_")[1])
                 gc_group = satellite_group[object_name]
+                if plummer_files is not None:
+                    plummer_key = (satellite_id, cluster_index)
+                    if plummer_key not in plummer_files:
+                        raise KeyError(
+                            "No NSC-specific Plummer file was provided for "
+                            f"satellite {satellite_id}, object {cluster_index}."
+                        )
+                    object_base_particles = _load_plummer_particles(
+                        plummer_files[plummer_key]
+                    )
+                else:
+                    object_base_particles = base_particles
+                number_of_particles = len(object_base_particles)
                 gc_time = np.asarray(gc_group["time"][:])
                 gc_snapshot = np.asarray(gc_group["snapshot"][:], dtype=int)
                 gc_x = np.asarray(gc_group["x"][:])
@@ -338,7 +367,7 @@ def run_ex_situ_streams(
                 with potential_file.open("rb") as stream:
                     potential_history = pickle.load(stream)
 
-                particle_state = base_particles.copy()
+                particle_state = object_base_particles.copy()
                 particle_unbound = np.zeros(number_of_particles, dtype=bool)
                 release_snapshot = np.full(number_of_particles, -1, dtype=int)
                 release_sample = np.full(number_of_particles, -1, dtype=int)

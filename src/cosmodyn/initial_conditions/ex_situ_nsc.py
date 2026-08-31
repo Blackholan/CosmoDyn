@@ -9,6 +9,8 @@ import numpy as np
 from astropy import units
 from galpy.potential import vcirc
 
+from .nsc_mass import resolve_nsc_mass
+
 
 SATELLITE_STELLAR_MASS_COLUMN = 6
 
@@ -89,6 +91,12 @@ def generate_ex_situ_nscs(
         raise ValueError(
             f"{object_type} initial_radius must be strictly positive."
         )
+    if object_mass is None:
+        raise ValueError(f"object_mass is required for a {object_type}.")
+    if not np.isfinite(object_mass):
+        raise ValueError(f"{object_type}_MASS must be finite.")
+    if object_type == "NSC" and object_mass < 0.0:
+        raise ValueError("NSC_MASS must be non-negative.")
 
     output_directory.mkdir(parents=True, exist_ok=True)
     satellites = _read_satellite_list(satellites_file)
@@ -159,9 +167,7 @@ def generate_ex_situ_nscs(
             [[initial_radius, 0.0, circular_velocity, 0.0, 0.0, 0.0]],
             dtype=float,
         )
-        if object_type == "BH":
-            if object_mass is None:
-                raise ValueError("object_mass is required for a BH.")
+        if object_type in {"NSC", "BH"}:
             if object_mass > 0.0:
                 resolved_mass = float(object_mass)
             else:
@@ -181,7 +187,11 @@ def generate_ex_situ_nscs(
                         f"Satellite {satellite_id}: stellar mass must be "
                         "finite and positive."
                     )
-                resolved_mass = 0.006 * stellar_mass
+                resolved_mass = (
+                    0.006 * stellar_mass
+                    if object_type == "BH"
+                    else resolve_nsc_mass(object_mass, stellar_mass)
+                )
             initial_conditions = np.column_stack(
                 (initial_conditions, [resolved_mass])
             )
@@ -205,8 +215,7 @@ def generate_ex_situ_nscs(
             f"vcirc={circular_velocity:.6g} km/s."
         )
         print(f"{object_type} initial conditions saved to: {output_file}")
-        if object_type == "BH":
-            print(f"BH mass: {resolved_mass:.6e} Msun.")
+        print(f"{object_type} mass: {resolved_mass:.6e} Msun.")
 
     retained_satellites_file = (
         output_directory / f"ExSituNSCSatellitesG{galaxy_id}.txt"

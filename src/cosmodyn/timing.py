@@ -276,7 +276,7 @@ def write_timing_report(
             f"{'N CPUs':>10}"
             f"{'CPUh':>14}"
             f"{'N particles':>16}"
-            f"{'N GCs':>10}\n"
+            f"{'N Objects':>10}\n"
         )
         stream.write("-" * 120 + "\n")
 
@@ -339,7 +339,7 @@ def write_timing_report(
             stream.write(
                 f"{stage:<30}"
                 f"Galaxies={galaxy_text:<8}"
-                f"GCs={total_gcs:<8}"
+                f"Objects={total_gcs:<8}"
                 f"Wall={total_wall_seconds:.2f} s "
                 f"({total_wall_hours:.6f} h)   "
                 f"CPUh={total_cpu_hours:.6f}\n"
