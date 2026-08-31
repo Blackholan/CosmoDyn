@@ -276,7 +276,7 @@ def write_timing_report(
             f"{'N CPUs':>10}"
             f"{'CPUh':>14}"
             f"{'N particles':>16}"
-            f"{'N Objects':>10}\n"
+            f"{'N objects':>10}\n"
         )
         stream.write("-" * 120 + "\n")
 

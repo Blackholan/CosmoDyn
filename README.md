@@ -11,19 +11,20 @@
 
 The current version includes
 
-- ✅ Generation of **in-situ and ex-situ globular cluster initial conditions**
-- ✅ Static and time-evolving galactic potentials
-- ✅ Moving satellite-galaxy potentials
-- ✅ Chandrasekhar dynamical friction in Cold Dark Matter (CDM)
-- ✅ Dynamical friction in Fuzzy Dark Matter (FDM)
-- ✅ Globular-cluster tidal mass loss, computed either during the orbital integration or in post-processing
-- ✅ Orbital integration of globular clusters formed in the host galaxy or accreted from satellite galaxies
-- ✅ Automatic release of ex-situ globular clusters from their parent satellites
-- ✅ Generation and integration of globular-cluster tidal streams
-- ✅ Generation of globular-cluster moving potentials for stream calculations
-- ✅ Static, evolving, in-situ, ex-situ and combined execution modes
-- ✅ Batch processing of multiple galaxies
-- ✅ Computation-time reports
+
+- ✅ Static and time-evolving analytical potentials for host galaxies
+- ✅ Reconstruction of satellite trajectories and their moving gravitational potentials
+- ✅ Optional inclusion of moving satellites in the total gravitational potential
+- ✅ Generation of in-situ and ex-situ initial conditions for globular clusters (GCs), nuclear star clusters (NSCs), and black holes (BHs)
+- ✅ User-defined or scaling-relation-based object populations and masses
+- ✅ Orbital integration of GCs, NSCs, and BHs within the reconstructed cosmological environment
+- ✅ Automatic release of ex-situ objects from their parent satellites
+- ✅ Central-capture and escape criteria
+- ✅ Chandrasekhar, anisotropic Binney, and Fuzzy Dark Matter dynamical-friction prescriptions
+- ✅ Tidal mass loss during orbital integration or in post-processing
+- ✅ Generation and integration of GC and NSC tidal streams using moving object potentials
+- ✅ Predefined in-situ, ex-situ, and full execution modes, together with a fully configurable custom mode
+- ✅ Batch processing of multiple galaxies, parallel stream calculations, diagnostic figures, and computation-time reports
 
 ---
 

@@ -83,6 +83,8 @@ CENTRAL_CAPTURE_RADIUS = 0.01  # kpc
 
 MASS_LOSS_MODE = "coupled"  # "none", "postprocess" or "coupled"
 
+GENERATE_GC_MOVING_POTENTIALS = False # only for streams
+
 
 # ==========================================================
 # 4. OPTIONAL EX-SITU OVERRIDES
