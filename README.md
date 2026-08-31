@@ -57,6 +57,7 @@ The following packages are installed automatically
 - tqdm
 - pandas
 - joblib
+- colossus
 
 ---
 
