@@ -21,6 +21,12 @@ from galpy.potential import (
 )
 from scipy.integrate import solve_ivp
 
+from cosmodyn.potential_utils import (
+    combine_potential_and_force,
+    potential_components,
+    set_non_dissipative,
+)
+
 
 def _read_satellite_list(path):
     satellites = []
@@ -40,17 +46,11 @@ def _read_satellite_list(path):
 
 
 def _set_non_dissipative(potential):
-    components = potential if isinstance(potential, (list, tuple)) else [potential]
-    for component in components:
-        component.isDissipative = False
+    set_non_dissipative(potential)
 
 
 def _combine(potential, force):
-    if force is None:
-        return potential
-    if isinstance(potential, (list, tuple)):
-        return list(potential) + [force]
-    return [potential, force]
+    return combine_potential_and_force(potential, force)
 
 
 def _potential_at(potentials, snapshot, mode, static_index):
@@ -169,11 +169,7 @@ def _satellite_energy(relative_orbit, times, internal_potential):
         + np.asarray(relative_orbit.vz(times)) ** 2
     )
 
-    components = (
-        list(internal_potential)
-        if isinstance(internal_potential, (list, tuple))
-        else [internal_potential]
-    )
+    components = potential_components(internal_potential)
     potential_energy = np.zeros_like(speed_squared, dtype=float)
 
     for component in components:

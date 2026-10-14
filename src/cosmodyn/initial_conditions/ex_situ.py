@@ -18,6 +18,12 @@ from galpy.potential import (
 )
 from scipy.interpolate import interp1d
 
+from cosmodyn.potential_utils import (
+    potential_components,
+    set_non_dissipative,
+    vcirc_compatible_potential,
+)
+
 from .in_situ import (
     find_agama_python,
     number_of_globular_clusters,
@@ -27,7 +33,7 @@ from .in_situ import (
 def _vcirc_fixed(radius, potential):
     """Circular velocity wrapper using physical kpc units."""
     return vcirc(
-        potential,
+        vcirc_compatible_potential(potential),
         np.asarray(radius) * units.kpc,
     )
 
@@ -207,6 +213,13 @@ def _select_circular_candidates(
 ):
     """Apply the same E-Lz circularity selection as the in-situ code."""
 
+    components = potential_components(potential)
+    if len(components) < 2:
+        raise ValueError(
+            "The circularity selection requires stellar and dark-matter "
+            "potential components."
+        )
+
     position = np.sqrt(
         x**2 + y**2 + z**2
     )
@@ -255,13 +268,13 @@ def _select_circular_candidates(
     phi = phi[valid]
 
     potential_energy_1 = evaluatePotentials(
-        potential[0],
+        components[0],
         position * units.kpc,
         0.0 * units.kpc,
     )
 
     potential_energy_2 = evaluatePotentials(
-        potential[1],
+        components[1],
         position * units.kpc,
         0.0 * units.kpc,
     )
@@ -284,7 +297,7 @@ def _select_circular_candidates(
 
     circular_velocity = _vcirc_fixed(
         radius_grid,
-        potential[0] + potential[1],
+        components[:2],
     )
 
     circular_angular_momentum = (
@@ -293,13 +306,13 @@ def _select_circular_candidates(
     )
 
     circular_potential_energy_1 = evaluatePotentials(
-        potential[0],
+        components[0],
         radius_grid * units.kpc,
         0.0 * units.kpc,
     )
 
     circular_potential_energy_2 = evaluatePotentials(
-        potential[1],
+        components[1],
         radius_grid * units.kpc,
         0.0 * units.kpc,
     )
@@ -727,11 +740,7 @@ def generate_ex_situ_gcs(
             tagging_snapshot
         ]
 
-        if isinstance(satellite_potential, (list, tuple)):
-            for component in satellite_potential:
-                component.isDissipative = False
-        else:
-            satellite_potential.isDissipative = False
+        set_non_dissipative(satellite_potential)
 
         candidates, phase_space = (
             _select_circular_candidates(

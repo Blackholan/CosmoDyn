@@ -20,6 +20,11 @@ from galpy.potential import (
 )
 from scipy.integrate import solve_ivp
 
+from cosmodyn.potential_utils import (
+    combine_potential_and_force,
+    set_non_dissipative,
+)
+
 
 def _format_float_for_filename(value):
     """Return a compact, file-name-safe representation of a float."""
@@ -28,9 +33,7 @@ def _format_float_for_filename(value):
 
 def _set_non_dissipative(potential):
     """Explicitly set isDissipative=False on all potential components."""
-    components = potential if isinstance(potential, (list, tuple)) else [potential]
-    for component in components:
-        component.isDissipative = False
+    set_non_dissipative(potential)
 
 
 
@@ -61,13 +64,7 @@ def _last_apocenter(radius_history):
 
 def _combine_potential_and_force(potential, force):
     """Return a galpy-compatible list containing a potential and one force."""
-    if force is None:
-        return potential
-    if isinstance(potential, list):
-        return potential + [force]
-    if isinstance(potential, tuple):
-        return list(potential) + [force]
-    return [potential, force]
+    return combine_potential_and_force(potential, force)
 
 
 def _df_cache_filename(

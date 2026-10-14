@@ -16,6 +16,8 @@ from galpy.potential import evaluatePotentials
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
+from cosmodyn.potential_utils import set_non_dissipative
+
 
 def _kinetic_energy(speed):
     """Return the specific kinetic energy."""
@@ -24,9 +26,7 @@ def _kinetic_energy(speed):
 
 def _set_non_dissipative(potential):
     """Explicitly set isDissipative=False on all host-potential components."""
-    components = potential if isinstance(potential, (list, tuple)) else [potential]
-    for component in components:
-        component.isDissipative = False
+    set_non_dissipative(potential)
 
 
 def _load_plummer_particles(plummer_file):

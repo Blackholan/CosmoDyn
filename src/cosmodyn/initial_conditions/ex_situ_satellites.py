@@ -21,6 +21,12 @@ from galpy.potential import (
     MovingObjectPotential,
 )
 
+from cosmodyn.potential_utils import (
+    combine_potential_and_force,
+    potential_components,
+    set_non_dissipative,
+)
+
 
 def _read_satellite_list(satellites_file):
     """Read lines formatted as ``satellite_id: snapshot,snapshot,...``."""
@@ -59,18 +65,12 @@ def _write_satellite_list(satellites, output_file):
 
 def _set_non_dissipative(potential):
     """Set ``isDissipative=False`` on all galpy potential components."""
-    components = potential if isinstance(potential, (list, tuple)) else [potential]
-    for component in components:
-        component.isDissipative = False
+    set_non_dissipative(potential)
 
 
 def _combine_potential_and_force(potential, force):
     """Return a galpy-compatible list containing a potential and a force."""
-    if force is None:
-        return potential
-    if isinstance(potential, (list, tuple)):
-        return list(potential) + [force]
-    return [potential, force]
+    return combine_potential_and_force(potential, force)
 
 
 def _potential_for_snapshot(
@@ -414,6 +414,8 @@ def prepare_ex_situ_satellites(
                 sequential_snapshots.append(snapshot)
 
             first_snapshot = sequential_snapshots[0]
+            static_satellite_row = satellite_data[first_snapshot].copy()
+
             current_phase_space = _initial_satellite_phase_space(
                 satellite_data[first_snapshot],
                 host_data[first_snapshot],
@@ -482,8 +484,14 @@ def prepare_ex_situ_satellites(
                     print(f"Non-finite orbit at snapshot {snapshot}. Stopping.")
                     break
 
-                internal_potential = _internal_satellite_potential(satellite_row)
-                _set_non_dissipative(internal_potential)
+                if potential_mode == "static":
+                    satellite_potential_row = static_satellite_row
+                else:
+                    satellite_potential_row = satellite_row
+
+                internal_potential = _internal_satellite_potential(
+                    satellite_potential_row
+                )
 
                 # In the satellite-centred frame, the host moves along the
                 # opposite coordinate transformation encoded by galpy's
@@ -679,11 +687,7 @@ def prepare_ex_situ_satellites(
             static_potential_index,
         )
         _set_non_dissipative(host_potential)
-        host_components = (
-            list(host_potential)
-            if isinstance(host_potential, (list, tuple))
-            else [host_potential]
-        )
+        host_components = potential_components(host_potential)
         full_host_potentials[snapshot] = (
             host_components
             + moving_satellites_by_snapshot.get(snapshot, [])

@@ -16,11 +16,11 @@ from galpy.potential import evaluatePotentials
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
+from cosmodyn.potential_utils import set_non_dissipative
+
 
 def _set_non_dissipative(potential):
-    components = potential if isinstance(potential, (list, tuple)) else [potential]
-    for component in components:
-        component.isDissipative = False
+    set_non_dissipative(potential)
 
 
 def _load_plummer_particles(plummer_file):
