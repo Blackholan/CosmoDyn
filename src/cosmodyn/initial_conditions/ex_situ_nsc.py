@@ -9,7 +9,10 @@ import numpy as np
 from astropy import units
 from galpy.potential import vcirc
 
-from .nsc_mass import resolve_nsc_mass
+from cosmodyn.potential_utils import (
+    set_non_dissipative,
+    vcirc_compatible_potential,
+)
 
 
 SATELLITE_STELLAR_MASS_COLUMN = 6
@@ -17,7 +20,10 @@ SATELLITE_STELLAR_MASS_COLUMN = 6
 
 def vcirc_fixed(radius, potential):
     """Return the physical circular velocity at ``radius`` in kpc."""
-    return vcirc(potential, np.asarray(radius) * units.kpc)
+    return vcirc(
+        vcirc_compatible_potential(potential),
+        np.asarray(radius) * units.kpc,
+    )
 
 
 def _read_satellite_list(satellites_file):
@@ -91,12 +97,6 @@ def generate_ex_situ_nscs(
         raise ValueError(
             f"{object_type} initial_radius must be strictly positive."
         )
-    if object_mass is None:
-        raise ValueError(f"object_mass is required for a {object_type}.")
-    if not np.isfinite(object_mass):
-        raise ValueError(f"{object_type}_MASS must be finite.")
-    if object_type == "NSC" and object_mass < 0.0:
-        raise ValueError("NSC_MASS must be non-negative.")
 
     output_directory.mkdir(parents=True, exist_ok=True)
     satellites = _read_satellite_list(satellites_file)
@@ -139,7 +139,8 @@ def generate_ex_situ_nscs(
             continue
 
         potential = potentials[tagging_snapshot]
-        if not isinstance(potential, (list, tuple)) or len(potential) < 2:
+        components = set_non_dissipative(potential)
+        if len(components) < 2:
             print(
                 f"Satellite {satellite_id}: stellar and dark-matter "
                 "potential components are unavailable; "
@@ -147,12 +148,10 @@ def generate_ex_situ_nscs(
             )
             continue
 
-        potential[0].isDissipative = False
-        potential[1].isDissipative = False
         circular_velocity = float(
             vcirc_fixed(
                 initial_radius,
-                potential[0] + potential[1],
+                components,
             )
         )
 
@@ -167,7 +166,9 @@ def generate_ex_situ_nscs(
             [[initial_radius, 0.0, circular_velocity, 0.0, 0.0, 0.0]],
             dtype=float,
         )
-        if object_type in {"NSC", "BH"}:
+        if object_type == "BH":
+            if object_mass is None:
+                raise ValueError("object_mass is required for a BH.")
             if object_mass > 0.0:
                 resolved_mass = float(object_mass)
             else:
@@ -187,11 +188,7 @@ def generate_ex_situ_nscs(
                         f"Satellite {satellite_id}: stellar mass must be "
                         "finite and positive."
                     )
-                resolved_mass = (
-                    0.006 * stellar_mass
-                    if object_type == "BH"
-                    else resolve_nsc_mass(object_mass, stellar_mass)
-                )
+                resolved_mass = 0.006 * stellar_mass
             initial_conditions = np.column_stack(
                 (initial_conditions, [resolved_mass])
             )
@@ -215,7 +212,8 @@ def generate_ex_situ_nscs(
             f"vcirc={circular_velocity:.6g} km/s."
         )
         print(f"{object_type} initial conditions saved to: {output_file}")
-        print(f"{object_type} mass: {resolved_mass:.6e} Msun.")
+        if object_type == "BH":
+            print(f"BH mass: {resolved_mass:.6e} Msun.")
 
     retained_satellites_file = (
         output_directory / f"ExSituNSCSatellitesG{galaxy_id}.txt"

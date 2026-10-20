@@ -19,7 +19,11 @@ from galpy.potential import (
     FDMDynamicalFrictionForce,
     HernquistPotential,
     MovingObjectPotential,
+    evaluateRforces,
+    evaluatephitorques,
+    evaluatezforces,
 )
+from galpy.util import conversion
 
 from cosmodyn.potential_utils import (
     combine_potential_and_force,
@@ -215,6 +219,136 @@ def _phase_space_from_orbit_endpoint(orbit, times):
         orbit.vz(times)[-1] * units.km / units.s,
         orbit.phi(times)[-1] * units.rad,
     ]
+
+
+def _opposite_orbit(orbit, times, integration_potential, integration_method):
+    """Return the trajectory of the host centre in the satellite frame.
+
+    The axes of the satellite-centred frame remain parallel to the host-frame
+    axes, so the host centre is located at ``-r_sat(t)``.  For the centred,
+    inversion-symmetric host potentials currently supported by this module,
+    this trajectory is obtained by reflecting the satellite initial state
+    through the origin and integrating it with the same forces.
+    """
+    initial_phase = [
+        orbit.R(times[0]) * units.kpc,
+        orbit.vR(times[0]) * units.km / units.s,
+        orbit.vT(times[0]) * units.km / units.s,
+        -orbit.z(times[0]) * units.kpc,
+        -orbit.vz(times[0]) * units.km / units.s,
+        (orbit.phi(times[0]) + np.pi) * units.rad,
+    ]
+    opposite = Orbit(initial_phase)
+    opposite.integrate(
+        times,
+        integration_potential,
+        method=integration_method,
+    )
+
+    # MovingObjectPotential must follow -r_sat, not +r_sat.  Refuse to save a
+    # silently inconsistent frame if a future, non-inversion-symmetric host
+    # model no longer preserves the reflected orbit.
+    residual = np.sqrt(
+        (np.asarray(opposite.x(times)) + np.asarray(orbit.x(times))) ** 2
+        + (np.asarray(opposite.y(times)) + np.asarray(orbit.y(times))) ** 2
+        + (np.asarray(opposite.z(times)) + np.asarray(orbit.z(times))) ** 2
+    )
+    scale = np.maximum(
+        np.sqrt(
+            np.asarray(orbit.x(times)) ** 2
+            + np.asarray(orbit.y(times)) ** 2
+            + np.asarray(orbit.z(times)) ** 2
+        ),
+        1.0,
+    )
+    if np.nanmax(residual / scale) > 1.0e-7:
+        raise RuntimeError(
+            "The host potential is not inversion-symmetric enough to build "
+            "the satellite-centred frame from a reflected orbit."
+        )
+    return opposite
+
+
+def _satellite_frame_acceleration(orbit, times, integration_potential):
+    """Sample the acceleration of the satellite-frame origin.
+
+    Values are stored in galpy internal units because they are later supplied
+    to ``NonInertialFrameForce``.  The complete force used for the satellite
+    orbit is evaluated, including satellite dynamical friction when enabled.
+    """
+    ro = float(orbit._ro)
+    vo = float(orbit._vo)
+    time_internal = np.atleast_1d(
+        np.asarray(
+            conversion.parse_time(times, ro=ro, vo=vo),
+            dtype=float,
+        )
+    )
+    R = np.atleast_1d(
+        np.asarray(orbit.R(times, use_physical=False), dtype=float)
+    )
+    z = np.atleast_1d(
+        np.asarray(orbit.z(times, use_physical=False), dtype=float)
+    )
+    phi = np.atleast_1d(
+        np.asarray(orbit.phi(times, use_physical=False), dtype=float)
+    )
+    vR = np.atleast_1d(
+        np.asarray(orbit.vR(times, use_physical=False), dtype=float)
+    )
+    vT = np.atleast_1d(
+        np.asarray(orbit.vT(times, use_physical=False), dtype=float)
+    )
+    vz = np.atleast_1d(
+        np.asarray(orbit.vz(times, use_physical=False), dtype=float)
+    )
+
+    acceleration = np.empty((len(time_internal), 3), dtype=float)
+    for index in range(len(time_internal)):
+        velocity = [vR[index], vT[index], vz[index]]
+        radial_force = evaluateRforces(
+            integration_potential,
+            R[index],
+            z[index],
+            phi=phi[index],
+            t=time_internal[index],
+            v=velocity,
+            use_physical=False,
+        )
+        azimuthal_torque = evaluatephitorques(
+            integration_potential,
+            R[index],
+            z[index],
+            phi=phi[index],
+            t=time_internal[index],
+            v=velocity,
+            use_physical=False,
+        )
+        vertical_force = evaluatezforces(
+            integration_potential,
+            R[index],
+            z[index],
+            phi=phi[index],
+            t=time_internal[index],
+            v=velocity,
+            use_physical=False,
+        )
+        safe_radius = max(abs(R[index]), np.finfo(float).tiny)
+        azimuthal_force = azimuthal_torque / safe_radius
+        cosine = np.cos(phi[index])
+        sine = np.sin(phi[index])
+        acceleration[index] = [
+            radial_force * cosine - azimuthal_force * sine,
+            radial_force * sine + azimuthal_force * cosine,
+            vertical_force,
+        ]
+
+    return {
+        "time_internal": time_internal,
+        "acceleration_internal": acceleration,
+        "ro": ro,
+        "vo": vo,
+    }
 
 
 def prepare_ex_situ_satellites(
@@ -493,16 +627,37 @@ def prepare_ex_situ_satellites(
                     satellite_potential_row
                 )
 
-                # In the satellite-centred frame, the host moves along the
-                # opposite coordinate transformation encoded by galpy's
-                # MovingObjectPotential, matching the legacy implementation.
-                moving_host_potential = MovingObjectPotential(
+                # In the translated, non-rotating satellite frame, the host
+                # centre follows -r_sat(t), while the fictitious acceleration
+                # is -a_sat(t).  Only plain arrays and galpy potentials are
+                # serialized here; the NonInertialFrameForce is reconstructed
+                # when the compact-object orbit is integrated because galpy's
+                # callable force object is not safely pickleable.
+                opposite_orbit = _opposite_orbit(
                     orbit,
+                    times,
+                    integration_potential,
+                    integration_method,
+                )
+                frame_data = _satellite_frame_acceleration(
+                    orbit,
+                    times,
+                    integration_potential,
+                )
+                moving_host_potential = MovingObjectPotential(
+                    opposite_orbit,
                     pot=host_potential,
                 )
-                combined_potentials[snapshot] = (
-                    internal_potential + [moving_host_potential]
-                )
+                combined_potentials[snapshot] = {
+                    "format_version": 2,
+                    "moving_host_potential": moving_host_potential,
+                    "frame_time_internal": frame_data["time_internal"],
+                    "frame_acceleration_internal": (
+                        frame_data["acceleration_internal"]
+                    ),
+                    "ro": frame_data["ro"],
+                    "vo": frame_data["vo"],
+                }
                 internal_potentials[snapshot] = internal_potential
 
                 # Galactocentric representation used by in-situ GCs: the

@@ -9,7 +9,10 @@ import numpy as np
 from astropy import units
 from galpy.potential import vcirc
 
-from .nsc_mass import resolve_nsc_mass
+from cosmodyn.potential_utils import (
+    set_non_dissipative,
+    vcirc_compatible_potential,
+)
 
 
 HOST_STELLAR_MASS_COLUMN = 5
@@ -18,7 +21,7 @@ HOST_STELLAR_MASS_COLUMN = 5
 def vcirc_fixed(radius, potential):
     """Return the physical circular velocity at ``radius`` in kpc."""
     return vcirc(
-        potential,
+        vcirc_compatible_potential(potential),
         np.asarray(radius) * units.kpc,
     )
 
@@ -53,16 +56,9 @@ def generate_in_situ_nsc(
         )
 
     resolved_mass = None
-    if object_mass is None:
-        raise ValueError(f"object_mass is required for a {object_type}.")
-    if not np.isfinite(object_mass):
-        raise ValueError(
-            f"{object_type}_MASS must be finite."
-        )
-    if object_type == "NSC" and float(object_mass) < 0.0:
-        raise ValueError("NSC_MASS must be non-negative.")
-
     if object_type == "BH":
+        if object_mass is None:
+            raise ValueError("object_mass is required for a BH.")
         if object_mass > 0.0:
             resolved_mass = float(object_mass)
         else:
@@ -87,27 +83,6 @@ def generate_in_situ_nsc(
                     "The host stellar mass must be finite and positive."
                 )
             resolved_mass = 0.006 * stellar_mass
-    else:
-        if object_mass > 0.0:
-            resolved_mass = float(object_mass)
-        else:
-            if host_data_file is None:
-                raise ValueError(
-                    "host_data_file is required when NSC_MASS == 0."
-                )
-            host_data_file = Path(host_data_file)
-            if not host_data_file.exists():
-                raise FileNotFoundError(f"File not found: {host_data_file}")
-            host_data = np.atleast_2d(np.loadtxt(host_data_file))
-            if not 0 <= snapshot_index < len(host_data):
-                raise IndexError(
-                    f"Snapshot {snapshot_index} is absent from "
-                    f"{host_data_file}."
-                )
-            stellar_mass = float(
-                host_data[snapshot_index, HOST_STELLAR_MASS_COLUMN]
-            )
-            resolved_mass = resolve_nsc_mass(object_mass, stellar_mass)
 
     with mwpots_path.open("rb") as stream:
         potentials = pickle.load(stream)
@@ -121,21 +96,19 @@ def generate_in_situ_nsc(
     else:
         potential = potentials
 
-    if not isinstance(potential, (list, tuple)) or len(potential) < 2:
+    components = set_non_dissipative(potential)
+    if len(components) < 2:
         raise ValueError(
-            f"The {object_type} circular velocity requires potential[0] and "
-            "potential[1] (stellar and dark-matter components)."
+            f"The {object_type} circular velocity requires stellar and "
+            "dark-matter potential components."
         )
 
     # Potentials loaded from pickle may retain an incorrect dissipative flag.
     # Both components used for vcirc are gravitational and non-dissipative.
-    potential[0].isDissipative = False
-    potential[1].isDissipative = False
-
     circular_velocity = float(
         vcirc_fixed(
             initial_radius,
-            potential[0] + potential[1],
+            components,
         )
     )
 
@@ -150,9 +123,10 @@ def generate_in_situ_nsc(
         [[initial_radius, 0.0, circular_velocity, 0.0, 0.0, 0.0]],
         dtype=float,
     )
-    initial_conditions = np.column_stack(
-        (initial_conditions, [resolved_mass])
-    )
+    if object_type == "BH":
+        initial_conditions = np.column_stack(
+            (initial_conditions, [resolved_mass])
+        )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     np.savetxt(output_file, initial_conditions, fmt="%.16g")
@@ -163,7 +137,8 @@ def generate_in_situ_nsc(
         f"vcirc={circular_velocity:.6g} km/s."
     )
     print(f"{object_type} initial conditions saved to: {output_file}")
-    print(f"{object_type} mass: {resolved_mass:.6e} Msun.")
+    if object_type == "BH":
+        print(f"BH mass: {resolved_mass:.6e} Msun.")
 
     return initial_conditions
 

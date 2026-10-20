@@ -107,6 +107,7 @@ DEFAULT_PARAMETERS = {
     "GC_HALF_MASS_RADIUS": 0.01,
     "REUSE_DF_CACHE": True,
     "CENTRAL_CAPTURE_RADIUS": 0.01,
+    "SATELLITE_CENTRAL_CAPTURE_RADIUS": 0.01,
     "GENERATE_GC_MOVING_POTENTIALS": True,
     "GC_POTENTIAL_SCALE_RADIUS": None,
 
@@ -1249,6 +1250,9 @@ def run_pipeline(configuration):
                     central_capture_radius=(
                         CENTRAL_CAPTURE_RADIUS
                     ),
+                    satellite_central_capture_radius=(
+                        SATELLITE_CENTRAL_CAPTURE_RADIUS
+                    ),
 
                     release_energy_tolerance=(
                         RELEASE_ENERGY_TOLERANCE
@@ -1320,6 +1324,9 @@ def run_pipeline(configuration):
                     DISSOLUTION_TIME_NORMALIZATION
                 ),
                 central_capture_radius=NSC_CENTRAL_CAPTURE_RADIUS,
+                satellite_central_capture_radius=(
+                    SATELLITE_CENTRAL_CAPTURE_RADIUS
+                ),
                 release_energy_tolerance=RELEASE_ENERGY_TOLERANCE,
                 generate_gc_moving_potentials=(
                     GENERATE_NSC_MOVING_POTENTIALS
@@ -1417,6 +1424,9 @@ def run_pipeline(configuration):
                 m22=M22,
                 mass_loss_mode="none",
                 central_capture_radius=BH_CENTRAL_CAPTURE_RADIUS,
+                satellite_central_capture_radius=(
+                    SATELLITE_CENTRAL_CAPTURE_RADIUS
+                ),
                 release_energy_tolerance=RELEASE_ENERGY_TOLERANCE,
                 generate_gc_moving_potentials=False,
                 gc_potential_scale_radius=0.0,
@@ -1795,6 +1805,9 @@ def run_pipeline(configuration):
         "reuse_df_cache": REUSE_DF_CACHE,
         "central_capture_radius": (
             CENTRAL_CAPTURE_RADIUS
+        ),
+        "satellite_central_capture_radius": (
+            SATELLITE_CENTRAL_CAPTURE_RADIUS
         ),
         "generate_gc_moving_potentials": (
             GENERATE_GC_MOVING_POTENTIALS

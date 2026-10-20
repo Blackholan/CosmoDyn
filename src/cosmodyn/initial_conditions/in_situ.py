@@ -25,21 +25,31 @@ from astropy import units
 from galpy.potential import evaluatePotentials, vcirc
 from matplotlib.patches import Circle
 
+from cosmodyn.potential_utils import (
+    set_non_dissipative,
+    vcirc_compatible_potential,
+)
+
 def vcirc_fixed(r, pot):
     return vcirc(
-        pot,
-        np.asarray(r) * units.kpc)
+        vcirc_compatible_potential(pot),
+        np.asarray(r) * units.kpc,
+    )
 
 
-#def number_of_globular_clusters(m_vir):
-    #return 10 ** (-9.58 + 0.99 * np.log10(m_vir))
+def number_of_globular_clustersV0(m_vir):
+    return 10 ** (-9.58 + 0.99 * np.log10(m_vir))
 
 
-def number_of_globular_clusters(m_vir):
+def number_of_globular_clustersV1(m_vir):
     intercept = np.random.normal(-9.58, 1.58)
     slope = np.random.normal(0.99, 0.13)
 
-    return 10 ** (intercept + slope * np.log10(m_vir))
+    return 10 ** (intercept + slope * np.log10(m_vir)) 
+
+def number_of_globular_clusters(m_vir):
+
+    return 10 ** (-9.58 + 0.99 * np.log10(10*m_vir)) 
 
 
 def _agama_config_file():
@@ -403,15 +413,8 @@ def generate_in_situ_gcs(
     else:
         potential = mwpots
 
-    # Convert the potential to a list of components internally.
-    if isinstance(potential, (list, tuple)):
-        potential_components = list(potential)
-    else:
-        potential_components = [potential]
-
-    # Compatibility with potentials loaded from pickle files.
-    for component in potential_components:
-        component.isDissipative = False
+    # Accept legacy lists and galpy CompositePotential objects.
+    potential_components = set_non_dissipative(potential)
 
     # ----------------------------------------------------------
     # Energy of the AGAMA particles

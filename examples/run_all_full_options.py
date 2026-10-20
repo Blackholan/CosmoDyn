@@ -74,6 +74,8 @@ REUSE_DF_CACHE = True
 GC_MASS = 1e6                  # Msun
 GC_HALF_MASS_RADIUS = 0.01     # kpc
 CENTRAL_CAPTURE_RADIUS = 0.001  # kpc
+SATELLITE_CENTRAL_CAPTURE_RADIUS = 0.01 # kpc
+
 MASS_LOSS_MODE = "coupled" # "none", "postprocess" or "coupled"
 
 # Parameters of the Kruijssen mass-loss prescription

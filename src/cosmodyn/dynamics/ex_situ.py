@@ -15,6 +15,7 @@ from galpy.potential import (
     ChandrasekharDynamicalFrictionForce,
     FDMDynamicalFrictionForce,
     MovingObjectPotential,
+    NonInertialFrameForce,
     PlummerPotential,
     evaluatePotentials,
     ttensor,
@@ -51,6 +52,77 @@ def _set_non_dissipative(potential):
 
 def _combine(potential, force):
     return combine_potential_and_force(potential, force)
+
+
+def _linear_interpolation(coordinates, values):
+    """Return a numba-compatible interpolation function for galpy."""
+    interpolation_coordinates = np.asarray(coordinates, dtype=float)
+    interpolation_values = np.asarray(values, dtype=float)
+    return lambda coordinate: np.interp(
+        coordinate,
+        interpolation_coordinates,
+        interpolation_values,
+    )
+
+
+def _satellite_frame_dynamics(frame_entry, internal_potential):
+    """Build the conservative and fictitious terms in the satellite frame."""
+    if (
+        not isinstance(frame_entry, dict)
+        or frame_entry.get("format_version") != 2
+    ):
+        raise RuntimeError(
+            "The prepared satellite potentials use the obsolete satellite-"
+            "frame format. Rebuild them once with "
+            "RUN_EX_SITU_SATELLITES=True before integrating ex-situ objects."
+        )
+
+    required = {
+        "moving_host_potential",
+        "frame_time_internal",
+        "frame_acceleration_internal",
+        "ro",
+        "vo",
+    }
+    missing = sorted(required - set(frame_entry))
+    if missing:
+        raise ValueError(
+            "Incomplete satellite-frame data; missing " + ", ".join(missing)
+        )
+
+    frame_time = np.asarray(
+        frame_entry["frame_time_internal"], dtype=float
+    )
+    acceleration = np.asarray(
+        frame_entry["frame_acceleration_internal"], dtype=float
+    )
+    if (
+        frame_time.ndim != 1
+        or len(frame_time) < 2
+        or acceleration.shape != (len(frame_time), 3)
+        or np.any(~np.isfinite(frame_time))
+        or np.any(~np.isfinite(acceleration))
+        or np.any(np.diff(frame_time) <= 0.0)
+    ):
+        raise ValueError("Invalid satellite-frame time or acceleration data.")
+
+    moving_host = frame_entry["moving_host_potential"]
+    conservative_potential = (
+        potential_components(internal_potential)
+        + potential_components(moving_host)
+    )
+    _set_non_dissipative(conservative_potential)
+
+    acceleration_functions = [
+        _linear_interpolation(frame_time, acceleration[:, component])
+        for component in range(3)
+    ]
+    frame_force = NonInertialFrameForce(
+        a0=acceleration_functions,
+        ro=float(frame_entry["ro"]),
+        vo=float(frame_entry["vo"]),
+    )
+    return conservative_potential, frame_force
 
 
 def _potential_at(potentials, snapshot, mode, static_index):
@@ -128,6 +200,56 @@ def _relative_plus_satellite(relative_orbit, times, satellite):
     }
 
 
+def _stationary_captured_phase(position, sample_count):
+    """Keep a host-captured object fixed for the requested samples."""
+    x = np.full(sample_count, float(position[0]))
+    y = np.full(sample_count, float(position[1]))
+    z = np.full(sample_count, float(position[2]))
+    zeros = np.zeros(sample_count, dtype=float)
+    return {
+        "x": x,
+        "y": y,
+        "z": z,
+        "R": np.hypot(x, y),
+        "phi": np.arctan2(y, x),
+        "vR": zeros.copy(),
+        "vT": zeros.copy(),
+        "vz": zeros.copy(),
+    }
+
+
+def _satellite_locked_captured_phase(relative_position, satellite):
+    """Move a satellite-captured object at a fixed satellite-frame offset."""
+    relative_position = np.asarray(relative_position, dtype=float)
+    x = np.asarray(satellite["x"]) + relative_position[0]
+    y = np.asarray(satellite["y"]) + relative_position[1]
+    z = np.asarray(satellite["z"]) + relative_position[2]
+
+    vx, vy = _cylindrical_to_cartesian_velocity(
+        np.asarray(satellite["vR"]),
+        np.asarray(satellite["vT"]),
+        np.asarray(satellite["phi"]),
+    )
+    R, vR, vT, phi = _cartesian_to_cylindrical(x, y, vx, vy)
+    return {
+        "x": x,
+        "y": y,
+        "z": z,
+        "R": R,
+        "phi": phi,
+        "vR": vR,
+        "vT": vT,
+        "vz": np.asarray(satellite["vz"]),
+    }
+
+
+def _replace_phase_from_index(phase, replacement, start_index):
+    """Replace a phase-space trajectory from one sample onward."""
+    for key in phase:
+        phase[key] = np.asarray(phase[key]).copy()
+        phase[key][start_index:] = np.asarray(replacement[key])[start_index:]
+
+
 def _satellite_segment(group, snapshot, target_times):
     snapshots = np.asarray(group["snapshot_index"][:], dtype=int)
     mask = snapshots == snapshot
@@ -193,14 +315,38 @@ def _tidal_strength(potential, x, y, z):
     result = np.zeros(len(x), dtype=float)
     _set_non_dissipative(potential)
     for index in range(len(x)):
-        eigenvalues = ttensor(
-            potential,
-            np.hypot(x[index], y[index]) * units.kpc,
-            z[index] * units.kpc,
-            phi=np.arctan2(y[index], x[index]),
-            t=0.0,
-            eigenval=True,
+        cylindrical_radius = np.hypot(x[index], y[index])
+        eigenvalues = np.asarray(
+            ttensor(
+                potential,
+                cylindrical_radius * units.kpc,
+                z[index] * units.kpc,
+                phi=np.arctan2(y[index], x[index]),
+                t=0.0,
+                eigenval=True,
+            ),
+            dtype=complex,
         )
+        real_scale = max(
+            float(np.max(np.abs(eigenvalues.real))),
+            1.0,
+        )
+        maximum_imaginary_part = float(
+            np.max(np.abs(eigenvalues.imag))
+        )
+        if maximum_imaginary_part > 1.0e-10 * real_scale:
+            raise ValueError(
+                "The tidal-tensor eigenvalues have a significant imaginary "
+                f"component at sample {index}, R={cylindrical_radius:.6e} "
+                f"kpc, z={float(z[index]):.6e} kpc: "
+                f"max|Im(lambda)|/max(max|Re(lambda)|, 1)="
+                f"{maximum_imaginary_part / real_scale:.3e}."
+            )
+
+        # galpy's generic eigensolver may return complex-valued eigenvalues
+        # with a negligible roundoff-level imaginary part. Remove that part
+        # explicitly rather than relying on an implicit complex-to-real cast.
+        eigenvalues = eigenvalues.real
         result[index] = (
             np.max(eigenvalues)
             - 0.5 * (eigenvalues[1] + eigenvalues[2])
@@ -337,6 +483,7 @@ def run_ex_situ_dynamics(
     tidal_strength_reference=7.01e2,
     dissolution_time_normalization=0.0107,
     central_capture_radius=0.01,
+    satellite_central_capture_radius=0.01,
     release_energy_tolerance=0.0,
     generate_gc_moving_potentials=False,
     gc_moving_potential_directory=None,
@@ -344,16 +491,28 @@ def run_ex_situ_dynamics(
     object_type="GC",
     initial_conditions_filename_template=None,
 ):
-    """Integrate ex-situ GCs in the satellite frame, then in the host frame.
+    """Integrate ex-situ objects in the satellite frame, then in the host frame.
 
-    Bound GCs use the prepared combined satellite-frame potential. Their DF
+    Bound objects use the prepared combined satellite-frame potential. Their DF
     and tidal mass loss use only the smooth internal satellite potential.
-    Released GCs use ``host_orbit_potential_file`` for their orbits and the
+    Released objects use ``host_orbit_potential_file`` for their orbits and the
     smooth ``host_density_potential_file`` for DF and tidal mass loss.
 
-    A GC is released at the first sample with satellite-centric energy above
-    ``release_energy_tolerance``. If it is still bound when the satellite
-    history ends, it is automatically released at the final satellite state.
+    An object is released only at the first sample with satellite-centric
+    energy above ``release_energy_tolerance``. Before release, its active
+    integration is stopped if its satellite-centric radius reaches
+    ``satellite_central_capture_radius``. Its output trajectory is nevertheless
+    completed to the final requested time: a satellite-captured object keeps
+    its final satellite-frame offset while the satellite exists, exactly as a
+    host-captured object is kept fixed in the host frame. Tidal mass loss stops
+    before the first captured sample, and the last pre-capture mass is retained
+    at all subsequent times. If capture and release are detected in the same
+    interval, the earliest event is retained.
+    If an uncaptured object is still bound when the prepared satellite history
+    ends, it remains unreleased and its integration stops at the final
+    available satellite state. Setting
+    ``satellite_central_capture_radius=None`` disables capture at satellite
+    centres.
     """
     galaxy_id = int(galaxy_id)
     satellites_file = Path(satellites_file)
@@ -408,6 +567,17 @@ def run_ex_situ_dynamics(
         raise ValueError("mass_loss_mode must be 'none', 'postprocess', or 'coupled'.")
     if central_capture_radius <= 0.0:
         raise ValueError("central_capture_radius must be positive.")
+    if satellite_central_capture_radius is not None:
+        satellite_central_capture_radius = float(
+            satellite_central_capture_radius
+        )
+        if (
+            not np.isfinite(satellite_central_capture_radius)
+            or satellite_central_capture_radius <= 0.0
+        ):
+            raise ValueError(
+                "satellite_central_capture_radius must be positive or None."
+            )
     if object_type == "BH":
         if gc_half_mass_radius != 0.0:
             raise ValueError("A BH must have gc_half_mass_radius=0.")
@@ -529,6 +699,13 @@ def run_ex_situ_dynamics(
             ]
             released = np.zeros(number_of_clusters, dtype=bool)
             captured = np.zeros(number_of_clusters, dtype=bool)
+            satellite_captured = np.zeros(number_of_clusters, dtype=bool)
+            captured_position = np.zeros(
+                (number_of_clusters, 3), dtype=float
+            )
+            satellite_capture_offset = np.zeros(
+                (number_of_clusters, 3), dtype=float
+            )
             release_time = np.full(number_of_clusters, np.nan)
             release_snapshot = np.full(number_of_clusters, -1, dtype=int)
             current_mass = initial_masses.copy()
@@ -537,6 +714,7 @@ def run_ex_situ_dynamics(
                 {} for _ in range(number_of_clusters)
             ]
             satellite_df_force_cache = {}
+            satellite_frame_cache = {}
 
             print(
                 f"Integrating G{galaxy_id} satellite {satellite_id}: "
@@ -605,6 +783,51 @@ def run_ex_situ_dynamics(
 
                 for cluster_index in range(number_of_clusters):
                     if captured[cluster_index]:
+                        if (
+                            satellite_captured[cluster_index]
+                            and satellite_exists
+                        ):
+                            interval_phase = (
+                                _satellite_locked_captured_phase(
+                                    satellite_capture_offset[cluster_index],
+                                    satellite_segment,
+                                )
+                            )
+                            captured_position[cluster_index] = [
+                                interval_phase["x"][-1],
+                                interval_phase["y"][-1],
+                                interval_phase["z"][-1],
+                            ]
+                        else:
+                            # The host-captured object remains fixed. A
+                            # satellite-captured object is treated in the same
+                            # way once its prepared satellite history ends.
+                            interval_phase = _stationary_captured_phase(
+                                captured_position[cluster_index],
+                                len(times_numeric),
+                            )
+
+                        mass_history = np.full(
+                            len(times_numeric),
+                            current_mass[cluster_index],
+                        )
+                        is_bound = (
+                            np.asarray(times_numeric)
+                            < release_time[cluster_index]
+                            if released[cluster_index]
+                            else np.ones(
+                                len(times_numeric), dtype=bool
+                            )
+                        )
+                        _append_segment(
+                            storage[cluster_index],
+                            times_numeric,
+                            interval_phase,
+                            mass_history,
+                            snapshot,
+                            is_bound,
+                        )
+
                         if generate_gc_moving_potentials:
                             moving_potential_histories[cluster_index][snapshot] = {
                                 "active": False,
@@ -625,12 +848,22 @@ def run_ex_situ_dynamics(
                     interval_phase = None
                     tidal_parts = []
                     potential_segments = []
+                    capture_stop = None
 
                     if not released[cluster_index] and satellite_exists:
-                        combined = combined_potentials[snapshot]
+                        frame_entry = combined_potentials[snapshot]
                         internal = internal_potentials[snapshot]
-                        _set_non_dissipative(combined)
                         _set_non_dissipative(internal)
+                        if snapshot not in satellite_frame_cache:
+                            satellite_frame_cache[snapshot] = (
+                                _satellite_frame_dynamics(
+                                    frame_entry,
+                                    internal,
+                                )
+                            )
+                        conservative, frame_force = satellite_frame_cache[
+                            snapshot
+                        ]
                         force = (
                             satellite_df_force_cache.get(snapshot)
                             if mass_for_df > 0.0
@@ -638,31 +871,163 @@ def run_ex_situ_dynamics(
                         )
                         if force is not None:
                             force.GMs = mass_for_df * units.Msun
+                        integration_forces = (
+                            potential_components(conservative)
+                            + [frame_force]
+                        )
+                        if force is not None:
+                            integration_forces.append(force)
                         relative_orbit = Orbit(current[cluster_index])
                         relative_orbit.integrate(
-                            times, _combine(combined, force),
+                            times,
+                            integration_forces,
                             method=integration_method,
                         )
+                        relative_x = np.asarray(relative_orbit.x(times))
+                        relative_y = np.asarray(relative_orbit.y(times))
+                        relative_z = np.asarray(relative_orbit.z(times))
+                        galactic_bound = _relative_plus_satellite(
+                            relative_orbit, times, satellite_segment
+                        )
+
                         energy = _satellite_energy(relative_orbit, times, internal)
                         positive = np.where(energy > release_energy_tolerance)[0]
                         release_index = int(positive[0]) if positive.size else None
 
-                        if release_index is None:
-                            galactic = _relative_plus_satellite(
-                                relative_orbit, times, satellite_segment
+                        satellite_capture_index = None
+                        if satellite_central_capture_radius is not None:
+                            satellite_radius = np.sqrt(
+                                relative_x**2
+                                + relative_y**2
+                                + relative_z**2
                             )
-                            interval_phase = galactic
+                            satellite_capture_indices = np.where(
+                                satellite_radius
+                                <= satellite_central_capture_radius
+                            )[0]
+                            if satellite_capture_indices.size:
+                                satellite_capture_index = int(
+                                    satellite_capture_indices[0]
+                                )
+
+                        # A bound object can also cross the capture radius of
+                        # the main host while its parent satellite passes close
+                        # to the host centre. Include this event in the same
+                        # chronological comparison.
+                        host_radius_while_bound = np.sqrt(
+                            galactic_bound["x"] ** 2
+                            + galactic_bound["y"] ** 2
+                            + galactic_bound["z"] ** 2
+                        )
+                        host_capture_indices = np.where(
+                            host_radius_while_bound <= central_capture_radius
+                        )[0]
+                        host_capture_index = (
+                            int(host_capture_indices[0])
+                            if host_capture_indices.size
+                            else None
+                        )
+
+                        capture_frame = None
+                        capture_index = None
+                        for candidate_frame, candidate_index in (
+                            ("satellite", satellite_capture_index),
+                            ("host", host_capture_index),
+                        ):
+                            if candidate_index is not None and (
+                                capture_index is None
+                                or candidate_index < capture_index
+                            ):
+                                capture_frame = candidate_frame
+                                capture_index = candidate_index
+
+                        capture_precedes_release = (
+                            capture_index is not None
+                            and (
+                                release_index is None
+                                or capture_index <= release_index
+                            )
+                        )
+
+                        if capture_precedes_release:
+                            capture_stop = capture_index + 1
+                            interval_phase = galactic_bound
+                            captured[cluster_index] = True
+                            satellite_captured[cluster_index] = (
+                                capture_frame == "satellite"
+                            )
+
+                            captured_position[cluster_index] = [
+                                galactic_bound["x"][capture_index],
+                                galactic_bound["y"][capture_index],
+                                galactic_bound["z"][capture_index],
+                            ]
+                            if satellite_captured[cluster_index]:
+                                satellite_capture_offset[cluster_index] = [
+                                    relative_x[capture_index],
+                                    relative_y[capture_index],
+                                    relative_z[capture_index],
+                                ]
+                                captured_phase = (
+                                    _satellite_locked_captured_phase(
+                                        satellite_capture_offset[
+                                            cluster_index
+                                        ],
+                                        satellite_segment,
+                                    )
+                                )
+                            else:
+                                captured_phase = _stationary_captured_phase(
+                                    captured_position[cluster_index],
+                                    len(times_numeric),
+                                )
+                            _replace_phase_from_index(
+                                interval_phase,
+                                captured_phase,
+                                capture_index,
+                            )
+                            captured_position[cluster_index] = [
+                                interval_phase["x"][-1],
+                                interval_phase["y"][-1],
+                                interval_phase["z"][-1],
+                            ]
+                            tidal_parts.append(
+                                (
+                                    0,
+                                    capture_index,
+                                    internal,
+                                    relative_x[:capture_index],
+                                    relative_y[:capture_index],
+                                    relative_z[:capture_index],
+                                )
+                            )
+                            potential_segments.append(
+                                _gc_moving_potential_entry(
+                                    relative_orbit,
+                                    internal,
+                                    mass_at_start,
+                                    gc_potential_scale_radius,
+                                    0,
+                                    capture_stop,
+                                    "satellite_centered",
+                                )
+                            )
+
+                        elif release_index is None:
+                            interval_phase = galactic_bound
                             tidal_parts.append(
                                 (
                                     0,
                                     len(times_numeric),
                                     internal,
-                                    np.asarray(relative_orbit.x(times)),
-                                    np.asarray(relative_orbit.y(times)),
-                                    np.asarray(relative_orbit.z(times)),
+                                    relative_x,
+                                    relative_y,
+                                    relative_z,
                                 )
                             )
-                            current[cluster_index] = _orbit_endpoint(relative_orbit, times)
+                            current[cluster_index] = _orbit_endpoint(
+                                relative_orbit, times
+                            )
                             potential_segments.append(
                                 _gc_moving_potential_entry(
                                     relative_orbit,
@@ -675,20 +1040,8 @@ def run_ex_situ_dynamics(
                                 )
                             )
 
-                            if snapshot == requested[-1]:
-                                released[cluster_index] = True
-                                release_time[cluster_index] = times_numeric[-1]
-                                release_snapshot[cluster_index] = snapshot
-                                current[cluster_index] = _phase_space(
-                                    galactic["R"][-1], galactic["vR"][-1],
-                                    galactic["vT"][-1], galactic["z"][-1],
-                                    galactic["vz"][-1], galactic["phi"][-1],
-                                )
                         else:
                             bound_count = release_index
-                            galactic_bound = _relative_plus_satellite(
-                                relative_orbit, times, satellite_segment
-                            )
                             release_phase = _phase_space(
                                 galactic_bound["R"][release_index],
                                 galactic_bound["vR"][release_index],
@@ -744,15 +1097,9 @@ def run_ex_situ_dynamics(
                                         0,
                                         bound_count,
                                         internal,
-                                        np.asarray(relative_orbit.x(times))[
-                                            :bound_count
-                                        ],
-                                        np.asarray(relative_orbit.y(times))[
-                                            :bound_count
-                                        ],
-                                        np.asarray(relative_orbit.z(times))[
-                                            :bound_count
-                                        ],
+                                        relative_x[:bound_count],
+                                        relative_y[:bound_count],
+                                        relative_z[:bound_count],
                                     ),
                                     (
                                         bound_count,
@@ -789,12 +1136,27 @@ def run_ex_situ_dynamics(
                                 )
                             )
                     else:
-                        # A satellite that ended without an earlier positive
-                        # energy releases its GCs from the saved endpoint.
                         if not released[cluster_index]:
-                            released[cluster_index] = True
-                            release_time[cluster_index] = times_numeric[0]
-                            release_snapshot[cluster_index] = snapshot
+                            # No physical release occurred: without a prepared
+                            # satellite trajectory and potential, the bound
+                            # orbit cannot be continued consistently. Keep the
+                            # object flagged as bound and stop its trajectory at
+                            # the final available satellite state.
+                            if generate_gc_moving_potentials:
+                                moving_potential_histories[cluster_index][
+                                    snapshot
+                                ] = {
+                                    "active": False,
+                                    "segments": [],
+                                    "inactive_reason": (
+                                        "satellite_history_ended_while_bound"
+                                    ),
+                                    "fallback": "none",
+                                    "gc_mass": float(
+                                        current_mass[cluster_index]
+                                    ),
+                                }
+                            continue
                         host_force = (
                             host_df_force_cache.get(snapshot)
                             if mass_for_df > 0.0
@@ -838,40 +1200,78 @@ def run_ex_situ_dynamics(
                             )
                         )
 
-                    radius = np.sqrt(
-                        interval_phase["x"] ** 2
-                        + interval_phase["y"] ** 2
-                        + interval_phase["z"] ** 2
-                    )
-                    capture_indices = np.where(radius <= central_capture_radius)[0]
-                    if capture_indices.size:
-                        stop = int(capture_indices[0]) + 1
-                        captured[cluster_index] = True
-                        for key in interval_phase:
-                            interval_phase[key] = interval_phase[key][:stop]
-                        cluster_times_numeric = cluster_times_numeric[:stop]
+                    if not captured[cluster_index]:
+                        radius = np.sqrt(
+                            interval_phase["x"] ** 2
+                            + interval_phase["y"] ** 2
+                            + interval_phase["z"] ** 2
+                        )
+                        capture_indices = np.where(
+                            radius <= central_capture_radius
+                        )[0]
+                        if capture_indices.size:
+                            capture_index = int(capture_indices[0])
+                            capture_stop = capture_index + 1
+                            captured[cluster_index] = True
+                            satellite_captured[cluster_index] = False
+                            captured_position[cluster_index] = [
+                                interval_phase["x"][capture_index],
+                                interval_phase["y"][capture_index],
+                                interval_phase["z"][capture_index],
+                            ]
+                            captured_phase = _stationary_captured_phase(
+                                captured_position[cluster_index],
+                                len(cluster_times_numeric),
+                            )
+                            _replace_phase_from_index(
+                                interval_phase,
+                                captured_phase,
+                                capture_index,
+                            )
 
                     if mass_loss_mode == "none":
                         mass_history = np.full(
                             len(cluster_times_numeric), mass_at_start
                         )
                     else:
-                        tidal = np.zeros(len(cluster_times_numeric))
-                        for begin, end, density, tx, ty, tz in tidal_parts:
-                            clipped_end = min(end, len(cluster_times_numeric))
-                            sample_count = clipped_end - begin
-                            if sample_count > 0:
-                                tidal[begin:clipped_end] = _tidal_strength(
-                                    density,
-                                    np.asarray(tx)[:sample_count],
-                                    np.asarray(ty)[:sample_count],
-                                    np.asarray(tz)[:sample_count],
-                                )
-                        mass_history = _integrate_mass(
-                            mass_at_start, cluster_times_numeric, tidal,
-                            mass_loss_gamma, tidal_strength_reference,
-                            dissolution_time_normalization,
+                        # The sample at capture_index already represents a
+                        # captured object. Compute tidal mass loss only on the
+                        # strictly pre-capture samples, then retain the last
+                        # physical mass at capture and at every later time.
+                        active_sample_count = (
+                            max(capture_stop - 1, 0)
+                            if capture_stop is not None
+                            else len(cluster_times_numeric)
                         )
+                        mass_history = np.full(
+                            len(cluster_times_numeric),
+                            mass_at_start,
+                        )
+                        if active_sample_count > 0:
+                            tidal = np.zeros(active_sample_count)
+                            for begin, end, density, tx, ty, tz in tidal_parts:
+                                clipped_end = min(end, active_sample_count)
+                                sample_count = clipped_end - begin
+                                if sample_count > 0:
+                                    tidal[begin:clipped_end] = _tidal_strength(
+                                        density,
+                                        np.asarray(tx)[:sample_count],
+                                        np.asarray(ty)[:sample_count],
+                                        np.asarray(tz)[:sample_count],
+                                    )
+                            active_mass_history = _integrate_mass(
+                                mass_at_start,
+                                cluster_times_numeric[:active_sample_count],
+                                tidal,
+                                mass_loss_gamma, tidal_strength_reference,
+                                dissolution_time_normalization,
+                            )
+                            mass_history[:active_sample_count] = (
+                                active_mass_history
+                            )
+                            mass_history[active_sample_count:] = (
+                                active_mass_history[-1]
+                            )
                         current_mass[cluster_index] = mass_history[-1]
 
                     is_bound = (
@@ -887,10 +1287,15 @@ def run_ex_situ_dynamics(
 
                     if generate_gc_moving_potentials:
                         if captured[cluster_index]:
+                            active_end = (
+                                capture_stop
+                                if capture_stop is not None
+                                else len(cluster_times_numeric)
+                            )
                             for segment in potential_segments:
                                 segment["end_index"] = min(
                                     segment["end_index"],
-                                    len(cluster_times_numeric),
+                                    active_end,
                                 )
                             potential_segments = [
                                 segment
@@ -921,6 +1326,7 @@ def run_ex_situ_dynamics(
                 "initial_masses": initial_masses,
                 "released": released,
                 "captured": captured,
+                "satellite_captured": satellite_captured,
                 "release_time": release_time,
                 "release_snapshot": release_snapshot,
             }
@@ -958,6 +1364,12 @@ def run_ex_situ_dynamics(
         h5.attrs["host_orbit_potential_file"] = str(host_orbit_potential_file)
         h5.attrs["host_density_potential_file"] = str(host_density_potential_file)
         h5.attrs["release_energy_tolerance"] = release_energy_tolerance
+        h5.attrs["central_capture_radius_kpc"] = central_capture_radius
+        h5.attrs["satellite_central_capture_radius_kpc"] = (
+            np.nan
+            if satellite_central_capture_radius is None
+            else satellite_central_capture_radius
+        )
         h5.attrs["initial_gc_mass_msun"] = (
             np.asarray(all_initial_object_masses, dtype=float)
             if object_type in {"NSC", "BH"}
@@ -980,6 +1392,10 @@ def run_ex_situ_dynamics(
             satellite_group = h5.create_group(f"Sat_{satellite_id}")
             satellite_group.create_dataset("Released", data=result["released"].astype(np.uint8))
             satellite_group.create_dataset("Captured", data=result["captured"].astype(np.uint8))
+            satellite_group.create_dataset(
+                "SatelliteCaptured",
+                data=result["satellite_captured"].astype(np.uint8),
+            )
             satellite_group.create_dataset("ReleaseTime", data=result["release_time"])
             satellite_group.create_dataset("ReleaseSnapshot", data=result["release_snapshot"])
             satellite_group.create_dataset(
